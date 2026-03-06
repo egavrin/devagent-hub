@@ -388,4 +388,148 @@ export class WorkflowOrchestrator {
     }
     return run;
   }
+
+  async review(issueNumber: number): Promise<WorkflowRun> {
+    const wfRun = this.store.getWorkflowRunByIssue(this.repo, issueNumber);
+    if (!wfRun) throw new Error(`No workflow run for issue #${issueNumber}`);
+    if (wfRun.status !== "draft_pr_opened") {
+      throw new Error(`Cannot review: status is ${wfRun.status}`);
+    }
+
+    const workDir = wfRun.worktreePath ?? this.repoRoot;
+
+    const agentRun = this.store.createAgentRun({
+      workflowRunId: wfRun.id,
+      phase: "review",
+    });
+
+    const result = this.launcher.launch({
+      phase: "review",
+      repoPath: workDir,
+      runId: agentRun.id,
+      input: {
+        issueNumber,
+        prNumber: wfRun.prNumber,
+        branch: wfRun.branch,
+      },
+    });
+
+    this.store.completeAgentRun(agentRun.id, {
+      status: result.exitCode === 0 ? "success" : "failed",
+      outputPath: result.outputPath,
+      eventsPath: result.eventsPath,
+    });
+
+    if (result.exitCode !== 0) {
+      this.store.updateStatus(wfRun.id, "failed", "Review phase failed");
+      return this.store.getWorkflowRun(wfRun.id)!;
+    }
+
+    const output = result.output as Record<string, unknown> | null;
+    const resultData = output?.result as Record<string, unknown> | undefined;
+    const verdict = resultData?.verdict ?? "pass";
+    const blockingCount = (resultData?.blockingCount as number) ?? 0;
+    const summary = (output?.summary as string) ?? "Review complete.";
+
+    await this.github.addComment(
+      this.repo, issueNumber,
+      `**Auto Review**\n\n${summary}`
+    );
+
+    if (verdict === "block" || blockingCount > 0) {
+      this.store.updateStatus(wfRun.id, "auto_review_fix_loop", `Review found ${blockingCount} blocking issues`);
+      this.store.updateWorkflowRun(wfRun.id, { currentPhase: "review" });
+    } else {
+      this.store.updateStatus(wfRun.id, "awaiting_human_review", "Auto review passed");
+      await this.github.addLabels(this.repo, issueNumber, ["da:awaiting-human"]);
+      await this.github.addComment(
+        this.repo, issueNumber,
+        "**Auto review passed.** Ready for human review."
+      );
+    }
+
+    return this.store.getWorkflowRun(wfRun.id)!;
+  }
+
+  async repair(issueNumber: number): Promise<WorkflowRun> {
+    const wfRun = this.store.getWorkflowRunByIssue(this.repo, issueNumber);
+    if (!wfRun) throw new Error(`No workflow run for issue #${issueNumber}`);
+    if (wfRun.status !== "auto_review_fix_loop") {
+      throw new Error(`Cannot repair: status is ${wfRun.status}`);
+    }
+
+    const maxRounds = this.config.repair.max_rounds;
+    const currentRound = wfRun.repairRound + 1;
+
+    if (currentRound > maxRounds) {
+      this.store.updateStatus(wfRun.id, "escalated", `Exceeded max repair rounds (${maxRounds})`);
+      await this.github.addComment(
+        this.repo, issueNumber,
+        `**Escalated.** Repair loop exceeded ${maxRounds} rounds. Human intervention needed.`
+      );
+      await this.github.addLabels(this.repo, issueNumber, ["da:escalated"]);
+      return this.store.getWorkflowRun(wfRun.id)!;
+    }
+
+    const workDir = wfRun.worktreePath ?? this.repoRoot;
+
+    const agentRun = this.store.createAgentRun({
+      workflowRunId: wfRun.id,
+      phase: "repair",
+    });
+
+    const result = this.launcher.launch({
+      phase: "repair",
+      repoPath: workDir,
+      runId: agentRun.id,
+      input: {
+        round: currentRound,
+        issueNumber,
+        prNumber: wfRun.prNumber,
+      },
+    });
+
+    this.store.completeAgentRun(agentRun.id, {
+      status: result.exitCode === 0 ? "success" : "failed",
+      outputPath: result.outputPath,
+      eventsPath: result.eventsPath,
+    });
+
+    this.store.updateWorkflowRun(wfRun.id, {
+      repairRound: currentRound,
+      currentPhase: "repair",
+    });
+
+    if (result.exitCode !== 0) {
+      this.store.updateStatus(wfRun.id, "failed", `Repair round ${currentRound} failed`);
+      return this.store.getWorkflowRun(wfRun.id)!;
+    }
+
+    const output = result.output as Record<string, unknown> | null;
+    const resultData = output?.result as Record<string, unknown> | undefined;
+    const remainingFindings = (resultData?.remainingFindings as number) ?? 0;
+    const verificationPassed = (resultData?.verificationPassed as boolean) ?? true;
+    const summary = (output?.summary as string) ?? `Repair round ${currentRound} complete.`;
+
+    await this.github.addComment(
+      this.repo, issueNumber,
+      `**Repair Round ${currentRound}**\n\n${summary}`
+    );
+
+    // If repair didn't fully resolve issues and we've hit the max, escalate
+    if (currentRound >= maxRounds && (remainingFindings > 0 || !verificationPassed)) {
+      this.store.updateStatus(wfRun.id, "escalated", `Repair failed after ${maxRounds} rounds`);
+      await this.github.addComment(
+        this.repo, issueNumber,
+        `**Escalated.** Repair loop failed after ${maxRounds} rounds. Human intervention needed.`
+      );
+      await this.github.addLabels(this.repo, issueNumber, ["da:escalated"]);
+      return this.store.getWorkflowRun(wfRun.id)!;
+    }
+
+    // Transition back to draft_pr_opened for re-review
+    this.store.updateStatus(wfRun.id, "draft_pr_opened", `Repair round ${currentRound} complete, ready for re-review`);
+
+    return this.store.getWorkflowRun(wfRun.id)!;
+  }
 }
