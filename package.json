@@ -6,7 +6,7 @@
     "devagent-hub": "dist/cli/index.js"
   },
   "scripts": {
-    "build": "bun build src/cli/index.ts --outdir dist --target bun",
+    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun",
     "test": "vitest run",
     "typecheck": "bunx tsc --noEmit",
     "lint": "bunx eslint src/"
@@ -17,5 +17,8 @@
     "bun-types": "latest",
     "better-sqlite3": "^11.0.0",
     "@types/better-sqlite3": "^7.6.0"
+  },
+  "dependencies": {
+    "yaml": "^2.8.2"
   }
 }
