@@ -17,6 +17,7 @@ export interface LauncherConfig {
   model?: string;
   maxIterations?: number;
   approvalMode?: string;
+  reasoning?: string;
 }
 
 export class RunLauncher {
@@ -69,11 +70,16 @@ export class RunLauncher {
     if (this.config.model) {
       args.push("--model", this.config.model);
     }
-    if (this.config.maxIterations !== undefined) {
+    if (this.config.maxIterations !== undefined && this.config.maxIterations > 0) {
       args.push("--max-iterations", String(this.config.maxIterations));
+    } else if (this.config.maxIterations === 0) {
+      args.push("--max-iterations", "999999");
     }
     if (this.config.approvalMode) {
       args.push("--approval-mode", this.config.approvalMode);
+    }
+    if (this.config.reasoning) {
+      args.push("--reasoning", this.config.reasoning);
     }
 
     // 5. Execute with execFileSync, capture exit code and stderr

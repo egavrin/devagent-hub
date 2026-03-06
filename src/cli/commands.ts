@@ -66,6 +66,7 @@ export async function runCommand(args: string[]): Promise<void> {
         maxIterations: config.runner.max_iterations,
         provider: config.runner.provider,
         model: config.runner.model,
+        reasoning: config.runner.reasoning,
       }),
       repo,
       repoRoot,
@@ -110,6 +111,7 @@ export async function triageCommand(args: string[]): Promise<void> {
         maxIterations: config.runner.max_iterations,
         provider: config.runner.provider,
         model: config.runner.model,
+        reasoning: config.runner.reasoning,
       }),
       repo,
       repoRoot,
@@ -177,6 +179,7 @@ export async function uiCommand(args: string[]): Promise<void> {
     maxIterations: config.runner.max_iterations,
     provider: config.runner.provider,
     model: config.runner.model,
+    reasoning: config.runner.reasoning,
     registry,
   });
 

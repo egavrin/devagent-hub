@@ -1,19 +1,15 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { Box, Text, useApp, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import type { StateStore } from "../state/store.js";
 import type { ProcessRegistry } from "../runner/process-registry.js";
 import type { WorkflowOrchestrator } from "../workflow/orchestrator.js";
-import type { WorkflowRun, AgentRun, StatusTransition } from "../state/types.js";
-import type { AgentEvent } from "./event-parser.js";
+import type { WorkflowRun, AgentRun } from "../state/types.js";
 import { useWorkflowRuns } from "./hooks/use-workflow-runs.js";
-import { useProcessOutput } from "./hooks/use-process-output.js";
-import { useKeybindings, type FocusPane, type LogMode } from "./hooks/use-keybindings.js";
+import { useEventLog, type LogEntry } from "./hooks/use-event-log.js";
+import { useKeybindings } from "./hooks/use-keybindings.js";
 import { KanbanBoard, KANBAN_COLUMNS } from "./components/kanban-board.js";
-import { LogPane } from "./components/log-pane.js";
-import { DetailPanel } from "./components/detail-panel.js";
 import { InputBar } from "./components/input-bar.js";
-import { StatusBar } from "./components/status-bar.js";
 
 interface AppProps {
   store: StateStore;
@@ -28,8 +24,6 @@ export function App({ store, registry, orchestrator }: AppProps) {
   const termWidth = stdout?.columns ?? 120;
   const runs = useWorkflowRuns(store);
 
-  const [focusPane, setFocusPane] = useState<FocusPane>("kanban");
-  const [logMode, setLogMode] = useState<LogMode>("structured");
   const [inputMode, setInputMode] = useState(false);
   const [newRunMode, setNewRunMode] = useState(false);
   const [newRunInput, setNewRunInput] = useState("");
@@ -37,26 +31,47 @@ export function App({ store, registry, orchestrator }: AppProps) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [focusedColumnIndex, setFocusedColumnIndex] = useState(0);
   const [focusedRowIndex, setFocusedRowIndex] = useState(0);
-  const [events] = useState<AgentEvent[]>([]);
 
   const selectedRun = runs.find((r) => r.id === selectedRunId) ?? null;
 
-  const transitions: StatusTransition[] = selectedRun
-    ? store.getTransitions(selectedRun.id)
-    : [];
   const agentRuns: AgentRun[] = selectedRun
     ? store.getAgentRunsByWorkflow(selectedRun.id)
     : [];
 
-  const activeAgentId = selectedRun
-    ? `${selectedRun.id}-${selectedRun.currentPhase ?? "triage"}`
+  // Track active process for kill functionality
+  const [activeProcessId, setActiveProcessId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onSpawn = (id: string) => setActiveProcessId(id);
+    const onExit = (id: string) => {
+      setActiveProcessId((cur) => (cur === id ? null : cur));
+    };
+    registry.on("spawn", onSpawn);
+    registry.on("exit", onExit);
+    const active = registry.list();
+    if (active.length > 0) setActiveProcessId(active[active.length - 1].id);
+    return () => {
+      registry.off("spawn", onSpawn);
+      registry.off("exit", onExit);
+    };
+  }, [registry]);
+
+  const activeAgentId = activeProcessId;
+
+  // Derive events file path: <artifactsDir>/<agentRunId>/<phase>-events.jsonl
+  const latestAgentRun = agentRuns.length > 0 ? agentRuns[agentRuns.length - 1] : null;
+  const eventsPath = latestAgentRun
+    ? latestAgentRun.eventsPath ?? `${require("os").homedir()}/.config/devagent-hub/artifacts/${latestAgentRun.id}/${latestAgentRun.phase}-events.jsonl`
     : null;
+  const logEntries = useEventLog(eventsPath);
 
-  const outputLines = useProcessOutput(registry, activeAgentId);
-
-  const showStatus = useCallback((msg: string) => {
+  const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showStatus = useCallback((msg: string, persist = false) => {
+    if (statusTimer.current) clearTimeout(statusTimer.current);
     setStatusMessage(msg);
-    setTimeout(() => setStatusMessage(null), 3000);
+    if (!persist) {
+      statusTimer.current = setTimeout(() => setStatusMessage(null), 5000);
+    }
   }, []);
 
   const getColumnRuns = useCallback((colIndex: number): WorkflowRun[] => {
@@ -66,8 +81,6 @@ export function App({ store, registry, orchestrator }: AppProps) {
   }, [runs]);
 
   const handleNavigate = useCallback((direction: "up" | "down" | "left" | "right") => {
-    if (focusPane !== "kanban") return;
-
     let newCol = focusedColumnIndex;
     let newRow = focusedRowIndex;
 
@@ -91,46 +104,149 @@ export function App({ store, registry, orchestrator }: AppProps) {
     if (colRuns[newRow]) {
       setSelectedRunId(colRuns[newRow].id);
     }
-  }, [focusPane, focusedColumnIndex, focusedRowIndex, getColumnRuns]);
+  }, [focusedColumnIndex, focusedRowIndex, getColumnRuns]);
 
   const handleSelect = useCallback(() => {
-    if (focusPane === "kanban") {
-      const colRuns = getColumnRuns(focusedColumnIndex);
-      if (colRuns[focusedRowIndex]) {
-        setSelectedRunId(colRuns[focusedRowIndex].id);
-        setFocusPane("detail");
-      }
+    const colRuns = getColumnRuns(focusedColumnIndex);
+    if (colRuns[focusedRowIndex]) {
+      setSelectedRunId(colRuns[focusedRowIndex].id);
     }
-  }, [focusPane, focusedColumnIndex, focusedRowIndex, getColumnRuns]);
+  }, [focusedColumnIndex, focusedRowIndex, getColumnRuns]);
 
   const handleBack = useCallback(() => {
     if (newRunMode) {
       setNewRunMode(false);
       setNewRunInput("");
-      return;
     }
-    if (focusPane === "detail") {
-      setFocusPane("kanban");
-    } else if (focusPane === "logs") {
-      setFocusPane("detail");
-    }
-  }, [focusPane, newRunMode]);
+  }, [newRunMode]);
 
-  const handleApprove = useCallback(async () => {
+  const handleApprove = useCallback(() => {
     if (!selectedRun) return;
     if (selectedRun.status === "plan_draft" || selectedRun.status === "plan_revision") {
-      await orchestrator.approvePlan(selectedRun.issueNumber);
-      showStatus(`Plan approved for #${selectedRun.issueNumber}`);
+      orchestrator.approvePlan(selectedRun.issueNumber).then(
+        () => showStatus(`Plan approved for #${selectedRun.issueNumber}`),
+        (err: unknown) => showStatus(`Approve failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
     }
   }, [selectedRun, orchestrator, showStatus]);
 
-  const handleRetry = useCallback(async () => {
+  const handleContinue = useCallback(() => {
     if (!selectedRun) return;
-    if (selectedRun.status === "failed") {
-      showStatus(`Retrying #${selectedRun.issueNumber}...`);
-      await orchestrator.triage(selectedRun.issueNumber);
+    const issue = selectedRun.issueNumber;
+    const status = selectedRun.status;
+
+    const actions: Record<string, { label: string; fn: () => Promise<unknown> }> = {
+      new: { label: "Triaging", fn: () => orchestrator.triage(issue) },
+      triaged: { label: "Planning", fn: () => orchestrator.plan(issue) },
+      plan_draft: { label: "Approving + implementing", fn: async () => {
+        await orchestrator.approvePlan(issue);
+        return orchestrator.implementAndPR(issue);
+      }},
+      plan_revision: { label: "Approving + implementing", fn: async () => {
+        await orchestrator.approvePlan(issue);
+        return orchestrator.implementAndPR(issue);
+      }},
+      plan_accepted: { label: "Implementing", fn: () => orchestrator.implementAndPR(issue) },
+      awaiting_local_verify: { label: "Opening PR", fn: () => orchestrator.openPR(issue) },
+      draft_pr_opened: { label: "Reviewing", fn: () => orchestrator.review(issue) },
+      auto_review_fix_loop: { label: "Repairing", fn: () => orchestrator.repair(issue) },
+      awaiting_human_review: {
+        label: "Marking done",
+        fn: async () => {
+          store.updateStatus(selectedRun.id, "done", "Marked done via TUI");
+          return store.getWorkflowRun(selectedRun.id);
+        },
+      },
+    };
+
+    const action = actions[status];
+    if (!action) {
+      showStatus(`Cannot continue from "${status}" — task may be running or terminal`);
+      return;
     }
-  }, [selectedRun, orchestrator, showStatus]);
+
+    showStatus(`${action.label} #${issue}...`, true);
+    action.fn().then(
+      () => showStatus(`${action.label} complete for #${issue} — press C to continue`),
+      (err: unknown) => showStatus(`Failed: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }, [selectedRun, orchestrator, store, showStatus]);
+
+  const handleRetry = useCallback(() => {
+    if (!selectedRun) return;
+    if (selectedRun.status !== "failed") {
+      showStatus("Retry only works on failed tasks");
+      return;
+    }
+
+    const issue = selectedRun.issueNumber;
+    const phase = selectedRun.currentPhase;
+
+    // Reset to pre-phase status and re-run that phase
+    const phaseRetry: Record<string, { resetTo: string; label: string; fn: () => Promise<unknown> }> = {
+      triage: {
+        resetTo: "new",
+        label: "Retrying triage",
+        fn: () => {
+          // Triage creates its own workflow run, so delete the failed one and start fresh
+          store.deleteWorkflowRun(selectedRun.id);
+          return orchestrator.triage(issue);
+        },
+      },
+      plan: {
+        resetTo: "triaged",
+        label: "Retrying plan",
+        fn: () => {
+          store.updateStatus(selectedRun.id, "triaged", "Reset for retry");
+          return orchestrator.plan(issue);
+        },
+      },
+      implement: {
+        resetTo: "plan_accepted",
+        label: "Retrying implement",
+        fn: () => {
+          store.updateStatus(selectedRun.id, "plan_accepted", "Reset for retry");
+          return orchestrator.implementAndPR(issue);
+        },
+      },
+      verify: {
+        resetTo: "implementing",
+        label: "Retrying verify",
+        fn: () => {
+          store.updateStatus(selectedRun.id, "implementing", "Reset for retry");
+          return orchestrator.verify(issue);
+        },
+      },
+      review: {
+        resetTo: "draft_pr_opened",
+        label: "Retrying review",
+        fn: () => {
+          store.updateStatus(selectedRun.id, "draft_pr_opened", "Reset for retry");
+          return orchestrator.review(issue);
+        },
+      },
+      repair: {
+        resetTo: "auto_review_fix_loop",
+        label: "Retrying repair",
+        fn: () => {
+          store.updateStatus(selectedRun.id, "auto_review_fix_loop", "Reset for retry");
+          return orchestrator.repair(issue);
+        },
+      },
+    };
+
+    const retry = phase ? phaseRetry[phase] : phaseRetry["triage"];
+    if (!retry) {
+      showStatus(`Don't know how to retry phase "${phase}"`);
+      return;
+    }
+
+    showStatus(`${retry.label} #${issue}...`, true);
+    retry.fn().then(
+      () => showStatus(`${retry.label} complete for #${issue} — press C to continue`),
+      (err: unknown) => showStatus(`Retry failed: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }, [selectedRun, orchestrator, store, showStatus]);
 
   const handleKill = useCallback(() => {
     if (!activeAgentId) return;
@@ -149,7 +265,6 @@ export function App({ store, registry, orchestrator }: AppProps) {
     const issueNum = selectedRun.issueNumber;
     store.deleteWorkflowRun(selectedRun.id);
     setSelectedRunId(null);
-    setFocusPane("kanban");
     showStatus(`Deleted run for #${issueNum}`);
   }, [selectedRun, store, showStatus]);
 
@@ -158,7 +273,7 @@ export function App({ store, registry, orchestrator }: AppProps) {
     setNewRunInput("");
   }, []);
 
-  const handleNewRunSubmit = useCallback(async (text: string) => {
+  const handleNewRunSubmit = useCallback((text: string) => {
     const issueNumber = parseInt(text.trim(), 10);
     if (!issueNumber || isNaN(issueNumber)) {
       showStatus("Invalid issue number");
@@ -168,15 +283,17 @@ export function App({ store, registry, orchestrator }: AppProps) {
     }
     setNewRunMode(false);
     setNewRunInput("");
-    showStatus(`Starting workflow for #${issueNumber}...`);
-    try {
-      const run = await orchestrator.runWorkflow(issueNumber, { autoApprove: true });
-      setSelectedRunId(run.id);
-      showStatus(`Workflow for #${issueNumber}: ${run.status}`);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      showStatus(`Failed: ${msg}`);
-    }
+    showStatus(`Triaging #${issueNumber}...`);
+    orchestrator.triage(issueNumber).then(
+      (run) => {
+        setSelectedRunId(run.id);
+        showStatus(`#${issueNumber}: ${run.status} — press C to continue`);
+      },
+      (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        showStatus(`Failed: ${msg}`);
+      },
+    );
   }, [orchestrator, showStatus]);
 
   const handleSendInput = useCallback((text: string) => {
@@ -185,24 +302,13 @@ export function App({ store, registry, orchestrator }: AppProps) {
     mp?.sendInput(text + "\n");
   }, [activeAgentId, registry]);
 
-  const handleSwitchPane = useCallback(() => {
-    if (focusPane === "kanban") {
-      if (selectedRun) {
-        setFocusPane("detail");
-      }
-    } else if (focusPane === "detail") {
-      setFocusPane("logs");
-    } else {
-      setFocusPane("kanban");
-    }
-  }, [focusPane, selectedRun]);
-
   useKeybindings({
     onNavigate: handleNavigate,
     onSelect: handleSelect,
-    onSwitchPane: handleSwitchPane,
-    onSetLogMode: setLogMode,
+    onSwitchPane: () => {},
+    onSetLogMode: () => {},
     onApprove: handleApprove,
+    onContinue: handleContinue,
     onRetry: handleRetry,
     onKill: handleKill,
     onDelete: handleDelete,
@@ -211,9 +317,20 @@ export function App({ store, registry, orchestrator }: AppProps) {
     onEnterInput: () => setInputMode(true),
     onExitInput: () => setInputMode(false),
     onBack: handleBack,
-  }, focusPane, inputMode || newRunMode);
+  }, "kanban", inputMode || newRunMode);
 
-  const showDetail = focusPane === "detail" || focusPane === "logs";
+  // One-line task info
+  const taskInfo = selectedRun
+    ? `#${selectedRun.issueNumber} ${(selectedRun.metadata as Record<string, unknown>)?.title ?? ""} [${selectedRun.status}]${selectedRun.currentPhase ? ` phase:${selectedRun.currentPhase}` : ""}${activeAgentId ? " ● RUNNING" : ""}`
+    : "No task selected — press N to start a new run";
+
+  // Log area: reserve space for kanban (~10 lines), task info (1), input/status/hints (3)
+  const logHeight = Math.max(5, termHeight - 16);
+  const visibleLogs = logEntries.slice(-logHeight);
+
+  const hints = inputMode
+    ? "Type message, Enter send, Esc cancel"
+    : "j/k↕ h/l↔  C continue  A approve  R retry  N new  D del  K kill  I input  Q quit";
 
   return (
     <Box flexDirection="column" width={termWidth} height={termHeight}>
@@ -222,35 +339,32 @@ export function App({ store, registry, orchestrator }: AppProps) {
         selectedRunId={selectedRunId}
         activeRunId={activeAgentId}
         focusedColumnIndex={focusedColumnIndex}
-        isFocused={focusPane === "kanban"}
+        isFocused={true}
       />
-      {showDetail && selectedRun ? (
-        <DetailPanel
-          run={selectedRun}
-          transitions={transitions}
-          agentRuns={agentRuns}
-          isFocused={focusPane === "detail"}
-        />
-      ) : (
-        <LogPane
-          selectedRun={selectedRun}
-          logMode={logMode}
-          events={events}
-          outputLines={outputLines}
-          isFocused={focusPane === "logs"}
-        />
-      )}
-      {focusPane === "logs" && (
-        <LogPane
-          selectedRun={selectedRun}
-          logMode={logMode}
-          events={events}
-          outputLines={outputLines}
-          isFocused={true}
-        />
-      )}
+      <Box paddingLeft={1} flexShrink={0}>
+        <Text bold color={activeAgentId ? "green" : "white"}>{taskInfo}</Text>
+      </Box>
+      <Box
+        borderStyle="single"
+        borderColor="gray"
+        flexDirection="column"
+        flexGrow={1}
+        paddingLeft={1}
+        overflow="hidden"
+      >
+        {visibleLogs.length === 0 ? (
+          <Text dimColor>No logs yet — select a task and press C to continue</Text>
+        ) : (
+          visibleLogs.map((entry, i) => (
+            <Text key={i} wrap="truncate">
+              <Text dimColor>{entry.timestamp.slice(11, 19)} </Text>
+              {entry.text}
+            </Text>
+          ))
+        )}
+      </Box>
       {newRunMode && (
-        <Box paddingLeft={1}>
+        <Box paddingLeft={1} flexShrink={0}>
           <Text color="green">Issue #: </Text>
           <TextInput
             value={newRunInput}
@@ -265,11 +379,13 @@ export function App({ store, registry, orchestrator }: AppProps) {
         onSubmit={handleSendInput}
       />
       {statusMessage && (
-        <Box paddingLeft={1}>
+        <Box paddingLeft={1} flexShrink={0}>
           <Text color="yellow">{statusMessage}</Text>
         </Box>
       )}
-      <StatusBar inputMode={inputMode} focusPane={focusPane} />
+      <Box paddingLeft={1} flexShrink={0}>
+        <Text dimColor>{hints}</Text>
+      </Box>
     </Box>
   );
 }

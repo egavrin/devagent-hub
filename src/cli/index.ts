@@ -10,15 +10,15 @@ import {
 
 const [command, ...args] = process.argv.slice(2);
 
-if (!command || command === "help") {
+if (command === "help") {
   console.log(`devagent-hub - GitHub-first workflow orchestrator for DevAgent
 
 Commands:
+  (default)             Launch interactive TUI dashboard
   run <issue-number>    Run full workflow for a GitHub issue
   triage <issue-number> Run triage phase only
   status <run-id>       Show workflow run status
   list                  List workflow runs
-  ui                    Launch interactive TUI dashboard
   help                  Show this help
 
 Options:
@@ -40,10 +40,7 @@ switch (command) {
   case "list":
     listCommand();
     break;
-  case "ui":
-    await uiCommand(args);
-    break;
   default:
-    console.error(`Unknown command: ${command}\nRun 'devagent-hub help' for usage.`);
-    process.exit(1);
+    await uiCommand(command ? [command, ...args] : args);
+    break;
 }

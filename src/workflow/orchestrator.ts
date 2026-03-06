@@ -54,11 +54,12 @@ export class WorkflowOrchestrator {
       metadata: { title: issue.title },
     });
 
-    // 3. Create agent run for triage phase
+    // 3. Create agent run for triage phase, set currentPhase
     const agentRun = this.store.createAgentRun({
       workflowRunId: workflowRun.id,
       phase: "triage",
     });
+    this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "triage" });
 
     // 4. Launch triage via launcher
     const result = await this.launcher.launch({
@@ -128,11 +129,12 @@ export class WorkflowOrchestrator {
     // 3. Fetch the issue from GitHub
     const issue = await this.github.fetchIssue(this.repo, issueNumber);
 
-    // 4. Create agent run for plan phase
+    // 4. Create agent run for plan phase, set currentPhase
     const agentRun = this.store.createAgentRun({
       workflowRunId: workflowRun.id,
       phase: "plan",
     });
+    this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "plan" });
 
     // 5. Launch plan phase via launcher
     const result = await this.launcher.launch({
@@ -176,7 +178,6 @@ export class WorkflowOrchestrator {
       `**DevAgent Plan Summary**\n${summary}\n\nReply with feedback or \`/approve\` to proceed.`,
     );
     this.store.updateStatus(workflowRun.id, "plan_draft", "Plan completed");
-    this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "plan" });
 
     return this.store.getWorkflowRun(workflowRun.id)!;
   }
@@ -286,11 +287,12 @@ export class WorkflowOrchestrator {
     // 2. Use worktreePath or repoRoot as workDir
     const workDir = workflowRun.worktreePath ?? this.repoRoot;
 
-    // 3. Create agent run for "verify"
+    // 3. Create agent run for "verify", set currentPhase
     const agentRun = this.store.createAgentRun({
       workflowRunId: workflowRun.id,
       phase: "verify",
     });
+    this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "verify" });
 
     // 4. Launch verify phase with verify commands as input
     const result = await this.launcher.launch({
@@ -402,6 +404,7 @@ export class WorkflowOrchestrator {
       workflowRunId: wfRun.id,
       phase: "review",
     });
+    this.store.updateWorkflowRun(wfRun.id, { currentPhase: "review" });
 
     const result = await this.launcher.launch({
       phase: "review",
@@ -438,7 +441,6 @@ export class WorkflowOrchestrator {
 
     if (verdict === "block" || blockingCount > 0) {
       this.store.updateStatus(wfRun.id, "auto_review_fix_loop", `Review found ${blockingCount} blocking issues`);
-      this.store.updateWorkflowRun(wfRun.id, { currentPhase: "review" });
     } else {
       this.store.updateStatus(wfRun.id, "awaiting_human_review", "Auto review passed");
       await this.github.addLabels(this.repo, issueNumber, ["da:awaiting-human"]);
@@ -477,6 +479,7 @@ export class WorkflowOrchestrator {
       workflowRunId: wfRun.id,
       phase: "repair",
     });
+    this.store.updateWorkflowRun(wfRun.id, { currentPhase: "repair" });
 
     const result = await this.launcher.launch({
       phase: "repair",
@@ -497,7 +500,6 @@ export class WorkflowOrchestrator {
 
     this.store.updateWorkflowRun(wfRun.id, {
       repairRound: currentRound,
-      currentPhase: "repair",
     });
 
     if (result.exitCode !== 0) {

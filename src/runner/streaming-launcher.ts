@@ -50,8 +50,13 @@ export class StreamingLauncher {
 
     if (this.config.provider) args.push("--provider", this.config.provider);
     if (this.config.model) args.push("--model", this.config.model);
-    if (this.config.maxIterations !== undefined) args.push("--max-iterations", String(this.config.maxIterations));
+    if (this.config.maxIterations !== undefined && this.config.maxIterations > 0) {
+      args.push("--max-iterations", String(this.config.maxIterations));
+    } else if (this.config.maxIterations === 0) {
+      args.push("--max-iterations", "999999");
+    }
     if (this.config.approvalMode) args.push("--approval", this.config.approvalMode);
+    if (this.config.reasoning) args.push("--reasoning", this.config.reasoning);
 
     const managedProcess = this.config.registry.spawn({
       id: `${runId}-${phase}`,
