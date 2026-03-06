@@ -532,4 +532,60 @@ export class WorkflowOrchestrator {
 
     return this.store.getWorkflowRun(wfRun.id)!;
   }
+
+  async runWorkflow(
+    issueNumber: number,
+    options: { autoApprove?: boolean } = {},
+  ): Promise<WorkflowRun> {
+    // Phase 1: Triage
+    let run = await this.triage(issueNumber);
+    if (run.status === "failed") return run;
+
+    // Phase 2: Plan
+    run = await this.plan(issueNumber);
+    if (run.status === "failed") return run;
+
+    // Auto-approve or wait
+    if (options.autoApprove) {
+      run = await this.approvePlan(issueNumber);
+    } else {
+      return run;
+    }
+
+    // Phase 3: Implement
+    run = await this.implement(issueNumber);
+    if (run.status === "failed") return run;
+
+    // Phase 4: Verify
+    run = await this.verify(issueNumber);
+    if (run.status === "failed") return run;
+
+    // Phase 5: Open PR
+    if (run.status === "awaiting_local_verify") {
+      run = await this.openPR(issueNumber);
+      if (run.status === "failed") return run;
+    }
+
+    // Phase 6: Review + Repair loop
+    const maxRounds = this.config.repair.max_rounds;
+    for (let round = 0; round <= maxRounds; round++) {
+      run = await this.review(issueNumber);
+
+      if (run.status === "awaiting_human_review") {
+        return run;
+      }
+
+      if (run.status === "auto_review_fix_loop") {
+        run = await this.repair(issueNumber);
+        if (run.status === "failed" || run.status === "escalated") {
+          return run;
+        }
+        // repair transitions back to draft_pr_opened → loop continues
+      }
+    }
+
+    // If we exhausted the loop without resolution, return current state
+    const finalRun = this.store.getWorkflowRunByIssue(this.repo, issueNumber);
+    return finalRun!;
+  }
 }
