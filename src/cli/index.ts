@@ -5,6 +5,7 @@ import {
   triageCommand,
   statusCommand,
   listCommand,
+  uiCommand,
 } from "./commands.js";
 
 const [command, ...args] = process.argv.slice(2);
@@ -17,6 +18,7 @@ Commands:
   triage <issue-number> Run triage phase only
   status <run-id>       Show workflow run status
   list                  List workflow runs
+  ui                    Launch interactive TUI dashboard
   help                  Show this help
 
 Options:
@@ -37,6 +39,9 @@ switch (command) {
     break;
   case "list":
     listCommand();
+    break;
+  case "ui":
+    await uiCommand(args);
     break;
   default:
     console.error(`Unknown command: ${command}\nRun 'devagent-hub help' for usage.`);

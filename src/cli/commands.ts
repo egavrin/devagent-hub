@@ -156,6 +156,43 @@ export function statusCommand(args: string[]): void {
   }
 }
 
+export async function uiCommand(args: string[]): Promise<void> {
+  const repoRoot = detectRepoRoot();
+  const repo = detectRepo(args);
+  const store = createStore();
+  const config = loadWorkflowConfig(repoRoot);
+
+  const { ProcessRegistry } = await import("../runner/process-registry.js");
+  const { StreamingLauncher } = await import("../runner/streaming-launcher.js");
+  const { launchTUI } = await import("../tui/index.js");
+
+  const registry = new ProcessRegistry();
+
+  const launcher = new StreamingLauncher({
+    devagentBin: "devagent",
+    artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
+    timeout: 10 * 60 * 1000,
+    approvalMode: config.runner.approval_mode,
+    maxIterations: config.runner.max_iterations,
+    provider: config.runner.provider,
+    model: config.runner.model,
+    registry,
+  });
+
+  const worktreeManager = new WorktreeManager(repoRoot);
+  const orchestrator = new WorkflowOrchestrator({
+    store,
+    github: new GhCliGateway(),
+    launcher: { launch: () => ({ exitCode: 0, outputPath: "", eventsPath: "", output: null }) },
+    repo,
+    repoRoot,
+    config,
+    worktreeManager,
+  });
+
+  launchTUI({ store, registry, orchestrator });
+}
+
 export function listCommand(): void {
   const store = createStore();
   try {
