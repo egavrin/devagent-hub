@@ -87,7 +87,7 @@ export function parseWorkflowConfig(content: string): WorkflowConfig {
   if (!parsed || typeof parsed !== "object") {
     return defaultConfig();
   }
-  return deepMerge(defaultConfig(), parsed);
+  return deepMerge(defaultConfig() as unknown as Record<string, unknown>, parsed) as unknown as WorkflowConfig;
 }
 
 /**
