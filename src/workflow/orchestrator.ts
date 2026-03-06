@@ -3,6 +3,7 @@ import type { GitHubGateway } from "../github/gateway.js";
 import type { WorkflowConfig } from "./config.js";
 import type { WorkflowRun } from "../state/types.js";
 import type { LaunchResult } from "../runner/launcher.js";
+import type { WorktreeManager } from "../workspace/worktree-manager.js";
 import { defaultConfig } from "./config.js";
 
 export interface OrchestratorDeps {
@@ -12,6 +13,7 @@ export interface OrchestratorDeps {
   repo: string;
   repoRoot?: string;
   config?: WorkflowConfig;
+  worktreeManager?: WorktreeManager;
 }
 
 export class WorkflowOrchestrator {
@@ -21,6 +23,7 @@ export class WorkflowOrchestrator {
   private repo: string;
   private repoRoot: string;
   private config: WorkflowConfig;
+  private worktreeManager?: WorktreeManager;
 
   constructor(deps: OrchestratorDeps) {
     this.store = deps.store;
@@ -29,6 +32,14 @@ export class WorkflowOrchestrator {
     this.repo = deps.repo;
     this.repoRoot = deps.repoRoot ?? ".";
     this.config = deps.config ?? defaultConfig();
+    this.worktreeManager = deps.worktreeManager;
+  }
+
+  private setupWorktree(issueNumber: number, wfRunId: string): string {
+    if (!this.worktreeManager) return this.repoRoot;
+    const wt = this.worktreeManager.create(issueNumber, this.repoRoot);
+    this.store.updateWorkflowRun(wfRunId, { branch: wt.branch, worktreePath: wt.path });
+    return wt.path;
   }
 
   async triage(issueNumber: number): Promise<WorkflowRun> {
@@ -198,5 +209,183 @@ export class WorkflowOrchestrator {
       return triageResult;
     }
     return this.plan(issueNumber);
+  }
+
+  async implement(issueNumber: number): Promise<WorkflowRun> {
+    // 1. Get workflow run, check status is "plan_accepted"
+    const workflowRun = this.store.getWorkflowRunByIssue(this.repo, issueNumber);
+    if (!workflowRun) {
+      throw new Error(`No workflow run found for issue ${issueNumber}`);
+    }
+    if (workflowRun.status !== "plan_accepted") {
+      throw new Error(
+        `Cannot implement issue ${issueNumber}: expected status "plan_accepted" but got "${workflowRun.status}"`,
+      );
+    }
+
+    // 2. Transition to "implementing", set currentPhase
+    this.store.updateStatus(workflowRun.id, "implementing", "Starting implementation");
+    this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "implement" });
+
+    // 3. Setup worktree (creates branch da/issue-N)
+    const workDir = this.setupWorktree(issueNumber, workflowRun.id);
+
+    // 4. Fetch issue for context
+    const issue = await this.github.fetchIssue(this.repo, issueNumber);
+
+    // 5. Create agent run for "implement"
+    const agentRun = this.store.createAgentRun({
+      workflowRunId: workflowRun.id,
+      phase: "implement",
+    });
+
+    // 6. Launch implement phase in worktree dir
+    const result = this.launcher.launch({
+      phase: "implement",
+      repoPath: workDir,
+      runId: agentRun.id,
+      input: {
+        issueNumber: issue.number,
+        title: issue.title,
+        body: issue.body,
+        labels: [...issue.labels],
+        author: issue.author,
+      },
+    });
+
+    // 7. Complete agent run
+    const agentStatus = result.exitCode === 0 ? "success" : "failed";
+    this.store.completeAgentRun(agentRun.id, {
+      status: agentStatus,
+      outputPath: result.outputPath,
+      eventsPath: result.eventsPath,
+    });
+
+    // 8. On failure: transition to "failed", post comment
+    if (agentStatus === "failed") {
+      this.store.updateStatus(workflowRun.id, "failed", "Implement agent failed");
+      await this.github.addComment(
+        this.repo,
+        issueNumber,
+        `**DevAgent implementation failed.**\nThe implement agent exited with code ${result.exitCode}. This issue has been marked as failed.`,
+      );
+      return this.store.getWorkflowRun(workflowRun.id)!;
+    }
+
+    // 9. On success: return updated run (stays in "implementing")
+    return this.store.getWorkflowRun(workflowRun.id)!;
+  }
+
+  async verify(issueNumber: number): Promise<WorkflowRun> {
+    // 1. Get workflow run
+    const workflowRun = this.store.getWorkflowRunByIssue(this.repo, issueNumber);
+    if (!workflowRun) {
+      throw new Error(`No workflow run found for issue ${issueNumber}`);
+    }
+
+    // 2. Use worktreePath or repoRoot as workDir
+    const workDir = workflowRun.worktreePath ?? this.repoRoot;
+
+    // 3. Create agent run for "verify"
+    const agentRun = this.store.createAgentRun({
+      workflowRunId: workflowRun.id,
+      phase: "verify",
+    });
+
+    // 4. Launch verify phase with verify commands as input
+    const result = this.launcher.launch({
+      phase: "verify",
+      repoPath: workDir,
+      runId: agentRun.id,
+      input: { commands: this.config.verify.commands },
+    });
+
+    // 5. Complete agent run
+    const agentStatus = result.exitCode === 0 ? "success" : "failed";
+    this.store.completeAgentRun(agentRun.id, {
+      status: agentStatus,
+      outputPath: result.outputPath,
+      eventsPath: result.eventsPath,
+    });
+
+    if (agentStatus === "failed") {
+      this.store.updateStatus(workflowRun.id, "failed", "Verify agent failed");
+      await this.github.addComment(
+        this.repo,
+        issueNumber,
+        `**DevAgent verification failed.**\nThe verify agent exited with code ${result.exitCode}.`,
+      );
+      return this.store.getWorkflowRun(workflowRun.id)!;
+    }
+
+    // 6. Transition to "awaiting_local_verify"
+    this.store.updateStatus(workflowRun.id, "awaiting_local_verify", "Verification passed");
+
+    // 7. Return updated run
+    return this.store.getWorkflowRun(workflowRun.id)!;
+  }
+
+  async openPR(issueNumber: number): Promise<WorkflowRun> {
+    // 1. Get workflow run, check status
+    const workflowRun = this.store.getWorkflowRunByIssue(this.repo, issueNumber);
+    if (!workflowRun) {
+      throw new Error(`No workflow run found for issue ${issueNumber}`);
+    }
+
+    if (workflowRun.status !== "awaiting_local_verify") {
+      throw new Error(
+        `Cannot open PR for issue ${issueNumber}: expected status "awaiting_local_verify" but got "${workflowRun.status}"`,
+      );
+    }
+
+    // 2. Get branch from run or default
+    const branch = workflowRun.branch ?? `da/issue-${issueNumber}`;
+    const workDir = workflowRun.worktreePath ?? this.repoRoot;
+
+    // 3. Push branch
+    await this.github.pushBranch(workDir, branch);
+
+    // 4. Fetch issue for title
+    const issue = await this.github.fetchIssue(this.repo, issueNumber);
+
+    // 5. Create draft PR
+    const pr = await this.github.createPR(this.repo, {
+      title: `[DevAgent] ${issue.title}`,
+      body: `Closes #${issueNumber}`,
+      head: branch,
+      base: "main",
+      draft: this.config.pr.draft,
+    });
+
+    // 6. Update run with prNumber and prUrl
+    this.store.updateWorkflowRun(workflowRun.id, {
+      prNumber: pr.number,
+      prUrl: pr.url,
+    });
+
+    // 7. Transition to "draft_pr_opened"
+    this.store.updateStatus(workflowRun.id, "draft_pr_opened", "Draft PR opened");
+
+    // 8. Post comment about PR opened
+    await this.github.addComment(
+      this.repo,
+      issueNumber,
+      `**DevAgent opened a draft PR:** [#${pr.number}](${pr.url})`,
+    );
+
+    // 9. Add "da:pr-open" label
+    await this.github.addLabels(this.repo, issueNumber, ["da:pr-open"]);
+
+    return this.store.getWorkflowRun(workflowRun.id)!;
+  }
+
+  async implementAndPR(issueNumber: number): Promise<WorkflowRun> {
+    let run = await this.implement(issueNumber);
+    if (run.status === "failed") return run;
+    run = await this.verify(issueNumber);
+    if (run.status === "awaiting_local_verify") {
+      run = await this.openPR(issueNumber);
+    }
+    return run;
   }
 }
