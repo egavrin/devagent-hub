@@ -12,13 +12,17 @@
     "lint": "bunx eslint src/"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0",
-    "bun-types": "latest",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/react": "^19.2.14",
     "better-sqlite3": "^11.0.0",
-    "@types/better-sqlite3": "^7.6.0"
+    "bun-types": "latest",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   },
   "dependencies": {
+    "ink": "^6.8.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.4",
     "yaml": "^2.8.2"
   }
 }
