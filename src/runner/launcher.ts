@@ -76,7 +76,7 @@ export class RunLauncher {
       args.push("--approval-mode", this.config.approvalMode);
     }
 
-    // 5. Execute with execFileSync, capture exit code
+    // 5. Execute with execFileSync, capture exit code and stderr
     let exitCode = 0;
     try {
       execFileSync(devagentBin, args, {
@@ -85,8 +85,14 @@ export class RunLauncher {
         cwd: repoPath,
       });
     } catch (err: unknown) {
-      const e = err as { status?: number };
+      const e = err as { status?: number; stderr?: Buffer | string };
       exitCode = typeof e.status === "number" ? e.status : 1;
+      const stderr = e.stderr ? String(e.stderr).trim() : "";
+      if (stderr) {
+        const stderrPath = join(runDir, `${phase}-stderr.txt`);
+        writeFileSync(stderrPath, stderr);
+        console.error(`[devagent-hub] ${phase} agent failed (exit ${exitCode}): ${stderr.split("\n")[0]}`);
+      }
     }
 
     // 6. Read output file if exists, parse JSON

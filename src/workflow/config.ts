@@ -7,7 +7,7 @@ export interface WorkflowConfig {
   tracker: { kind: string; issue_labels_include: string[] };
   dispatch: { max_concurrency: number };
   workspace: { mode: string; root: string };
-  runner: { approval_mode: string; max_iterations: number };
+  runner: { approval_mode: string; max_iterations: number; provider?: string; model?: string };
   roles: { triage: string; plan: string; implement: string; review: string };
   verify: { commands: string[] };
   pr: { draft: boolean; open_requires: string[] };
