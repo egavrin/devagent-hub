@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from "react";
-import { Box, useApp, useStdout } from "ink";
+import { Box, Text, useApp, useStdout } from "ink";
+import TextInput from "ink-text-input";
 import type { StateStore } from "../state/store.js";
 import type { ProcessRegistry } from "../runner/process-registry.js";
 import type { WorkflowOrchestrator } from "../workflow/orchestrator.js";
@@ -30,6 +31,9 @@ export function App({ store, registry, orchestrator }: AppProps) {
   const [focusPane, setFocusPane] = useState<FocusPane>("kanban");
   const [logMode, setLogMode] = useState<LogMode>("structured");
   const [inputMode, setInputMode] = useState(false);
+  const [newRunMode, setNewRunMode] = useState(false);
+  const [newRunInput, setNewRunInput] = useState("");
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [focusedColumnIndex, setFocusedColumnIndex] = useState(0);
   const [focusedRowIndex, setFocusedRowIndex] = useState(0);
@@ -37,7 +41,6 @@ export function App({ store, registry, orchestrator }: AppProps) {
 
   const selectedRun = runs.find((r) => r.id === selectedRunId) ?? null;
 
-  // Load detail data for selected run
   const transitions: StatusTransition[] = selectedRun
     ? store.getTransitions(selectedRun.id)
     : [];
@@ -50,6 +53,11 @@ export function App({ store, registry, orchestrator }: AppProps) {
     : null;
 
   const outputLines = useProcessOutput(registry, activeAgentId);
+
+  const showStatus = useCallback((msg: string) => {
+    setStatusMessage(msg);
+    setTimeout(() => setStatusMessage(null), 3000);
+  }, []);
 
   const getColumnRuns = useCallback((colIndex: number): WorkflowRun[] => {
     const col = KANBAN_COLUMNS[colIndex];
@@ -96,26 +104,33 @@ export function App({ store, registry, orchestrator }: AppProps) {
   }, [focusPane, focusedColumnIndex, focusedRowIndex, getColumnRuns]);
 
   const handleBack = useCallback(() => {
+    if (newRunMode) {
+      setNewRunMode(false);
+      setNewRunInput("");
+      return;
+    }
     if (focusPane === "detail") {
       setFocusPane("kanban");
     } else if (focusPane === "logs") {
       setFocusPane("detail");
     }
-  }, [focusPane]);
+  }, [focusPane, newRunMode]);
 
   const handleApprove = useCallback(async () => {
     if (!selectedRun) return;
     if (selectedRun.status === "plan_draft" || selectedRun.status === "plan_revision") {
       await orchestrator.approvePlan(selectedRun.issueNumber);
+      showStatus(`Plan approved for #${selectedRun.issueNumber}`);
     }
-  }, [selectedRun, orchestrator]);
+  }, [selectedRun, orchestrator, showStatus]);
 
   const handleRetry = useCallback(async () => {
     if (!selectedRun) return;
     if (selectedRun.status === "failed") {
+      showStatus(`Retrying #${selectedRun.issueNumber}...`);
       await orchestrator.triage(selectedRun.issueNumber);
     }
-  }, [selectedRun, orchestrator]);
+  }, [selectedRun, orchestrator, showStatus]);
 
   const handleKill = useCallback(() => {
     if (!activeAgentId) return;
@@ -124,16 +139,45 @@ export function App({ store, registry, orchestrator }: AppProps) {
       mp.kill();
       if (selectedRun) {
         store.updateStatus(selectedRun.id, "failed", "Killed by user via TUI");
+        showStatus(`Killed agent for #${selectedRun.issueNumber}`);
       }
     }
-  }, [activeAgentId, registry, selectedRun, store]);
+  }, [activeAgentId, registry, selectedRun, store, showStatus]);
 
   const handleDelete = useCallback(() => {
     if (!selectedRun) return;
+    const issueNum = selectedRun.issueNumber;
     store.deleteWorkflowRun(selectedRun.id);
     setSelectedRunId(null);
     setFocusPane("kanban");
-  }, [selectedRun, store]);
+    showStatus(`Deleted run for #${issueNum}`);
+  }, [selectedRun, store, showStatus]);
+
+  const handleNewRun = useCallback(() => {
+    setNewRunMode(true);
+    setNewRunInput("");
+  }, []);
+
+  const handleNewRunSubmit = useCallback(async (text: string) => {
+    const issueNumber = parseInt(text.trim(), 10);
+    if (!issueNumber || isNaN(issueNumber)) {
+      showStatus("Invalid issue number");
+      setNewRunMode(false);
+      setNewRunInput("");
+      return;
+    }
+    setNewRunMode(false);
+    setNewRunInput("");
+    showStatus(`Starting workflow for #${issueNumber}...`);
+    try {
+      const run = await orchestrator.runWorkflow(issueNumber, { autoApprove: true });
+      setSelectedRunId(run.id);
+      showStatus(`Workflow for #${issueNumber}: ${run.status}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showStatus(`Failed: ${msg}`);
+    }
+  }, [orchestrator, showStatus]);
 
   const handleSendInput = useCallback((text: string) => {
     if (!activeAgentId) return;
@@ -162,12 +206,12 @@ export function App({ store, registry, orchestrator }: AppProps) {
     onRetry: handleRetry,
     onKill: handleKill,
     onDelete: handleDelete,
-    onNewRun: () => {},
+    onNewRun: handleNewRun,
     onQuit: () => exit(),
     onEnterInput: () => setInputMode(true),
     onExitInput: () => setInputMode(false),
     onBack: handleBack,
-  }, focusPane, inputMode);
+  }, focusPane, inputMode || newRunMode);
 
   const showDetail = focusPane === "detail" || focusPane === "logs";
 
@@ -205,10 +249,26 @@ export function App({ store, registry, orchestrator }: AppProps) {
           isFocused={true}
         />
       )}
+      {newRunMode && (
+        <Box paddingLeft={1}>
+          <Text color="green">Issue #: </Text>
+          <TextInput
+            value={newRunInput}
+            onChange={setNewRunInput}
+            onSubmit={handleNewRunSubmit}
+          />
+          <Text dimColor>  Enter to start, Esc to cancel</Text>
+        </Box>
+      )}
       <InputBar
-        isActive={inputMode}
+        isActive={inputMode && !newRunMode}
         onSubmit={handleSendInput}
       />
+      {statusMessage && (
+        <Box paddingLeft={1}>
+          <Text color="yellow">{statusMessage}</Text>
+        </Box>
+      )}
       <StatusBar inputMode={inputMode} focusPane={focusPane} />
     </Box>
   );

@@ -48,7 +48,7 @@ export function useKeybindings(
     if (input === "a" || input === "A") actions.onApprove();
     if (input === "r" || input === "R") actions.onRetry();
     if (input === "K") actions.onKill();
-    if (input === "D") actions.onDelete();
+    if (input === "d" || input === "D") actions.onDelete();
     if (input === "n" || input === "N") actions.onNewRun();
     if (input === "q" || input === "Q") actions.onQuit();
     if (input === "i" || input === "I") actions.onEnterInput();
