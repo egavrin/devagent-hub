@@ -1,6 +1,6 @@
 import { useInput } from "ink";
 
-export type FocusPane = "kanban" | "logs";
+export type FocusPane = "kanban" | "logs" | "detail";
 export type LogMode = "structured" | "raw";
 
 export interface KeybindingActions {
@@ -11,10 +11,12 @@ export interface KeybindingActions {
   onApprove: () => void;
   onRetry: () => void;
   onKill: () => void;
+  onDelete: () => void;
   onNewRun: () => void;
   onQuit: () => void;
   onEnterInput: () => void;
   onExitInput: () => void;
+  onBack: () => void;
 }
 
 export function useKeybindings(
@@ -25,6 +27,11 @@ export function useKeybindings(
   useInput((input, key) => {
     if (inputMode) {
       if (key.escape) actions.onExitInput();
+      return;
+    }
+
+    if (key.escape) {
+      actions.onBack();
       return;
     }
 
@@ -41,6 +48,7 @@ export function useKeybindings(
     if (input === "a" || input === "A") actions.onApprove();
     if (input === "r" || input === "R") actions.onRetry();
     if (input === "K") actions.onKill();
+    if (input === "D") actions.onDelete();
     if (input === "n" || input === "N") actions.onNewRun();
     if (input === "q" || input === "Q") actions.onQuit();
     if (input === "i" || input === "I") actions.onEnterInput();

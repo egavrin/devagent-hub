@@ -3,13 +3,14 @@ import { Box, useApp, useStdout } from "ink";
 import type { StateStore } from "../state/store.js";
 import type { ProcessRegistry } from "../runner/process-registry.js";
 import type { WorkflowOrchestrator } from "../workflow/orchestrator.js";
-import type { WorkflowRun } from "../state/types.js";
+import type { WorkflowRun, AgentRun, StatusTransition } from "../state/types.js";
 import type { AgentEvent } from "./event-parser.js";
 import { useWorkflowRuns } from "./hooks/use-workflow-runs.js";
 import { useProcessOutput } from "./hooks/use-process-output.js";
 import { useKeybindings, type FocusPane, type LogMode } from "./hooks/use-keybindings.js";
 import { KanbanBoard, KANBAN_COLUMNS } from "./components/kanban-board.js";
 import { LogPane } from "./components/log-pane.js";
+import { DetailPanel } from "./components/detail-panel.js";
 import { InputBar } from "./components/input-bar.js";
 import { StatusBar } from "./components/status-bar.js";
 
@@ -35,6 +36,14 @@ export function App({ store, registry, orchestrator }: AppProps) {
   const [events] = useState<AgentEvent[]>([]);
 
   const selectedRun = runs.find((r) => r.id === selectedRunId) ?? null;
+
+  // Load detail data for selected run
+  const transitions: StatusTransition[] = selectedRun
+    ? store.getTransitions(selectedRun.id)
+    : [];
+  const agentRuns: AgentRun[] = selectedRun
+    ? store.getAgentRunsByWorkflow(selectedRun.id)
+    : [];
 
   const activeAgentId = selectedRun
     ? `${selectedRun.id}-${selectedRun.currentPhase ?? "triage"}`
@@ -77,12 +86,22 @@ export function App({ store, registry, orchestrator }: AppProps) {
   }, [focusPane, focusedColumnIndex, focusedRowIndex, getColumnRuns]);
 
   const handleSelect = useCallback(() => {
-    const colRuns = getColumnRuns(focusedColumnIndex);
-    if (colRuns[focusedRowIndex]) {
-      setSelectedRunId(colRuns[focusedRowIndex].id);
-      setFocusPane("logs");
+    if (focusPane === "kanban") {
+      const colRuns = getColumnRuns(focusedColumnIndex);
+      if (colRuns[focusedRowIndex]) {
+        setSelectedRunId(colRuns[focusedRowIndex].id);
+        setFocusPane("detail");
+      }
     }
-  }, [focusedColumnIndex, focusedRowIndex, getColumnRuns]);
+  }, [focusPane, focusedColumnIndex, focusedRowIndex, getColumnRuns]);
+
+  const handleBack = useCallback(() => {
+    if (focusPane === "detail") {
+      setFocusPane("kanban");
+    } else if (focusPane === "logs") {
+      setFocusPane("detail");
+    }
+  }, [focusPane]);
 
   const handleApprove = useCallback(async () => {
     if (!selectedRun) return;
@@ -109,25 +128,48 @@ export function App({ store, registry, orchestrator }: AppProps) {
     }
   }, [activeAgentId, registry, selectedRun, store]);
 
+  const handleDelete = useCallback(() => {
+    if (!selectedRun) return;
+    store.deleteWorkflowRun(selectedRun.id);
+    setSelectedRunId(null);
+    setFocusPane("kanban");
+  }, [selectedRun, store]);
+
   const handleSendInput = useCallback((text: string) => {
     if (!activeAgentId) return;
     const mp = registry.get(activeAgentId);
     mp?.sendInput(text + "\n");
   }, [activeAgentId, registry]);
 
+  const handleSwitchPane = useCallback(() => {
+    if (focusPane === "kanban") {
+      if (selectedRun) {
+        setFocusPane("detail");
+      }
+    } else if (focusPane === "detail") {
+      setFocusPane("logs");
+    } else {
+      setFocusPane("kanban");
+    }
+  }, [focusPane, selectedRun]);
+
   useKeybindings({
     onNavigate: handleNavigate,
     onSelect: handleSelect,
-    onSwitchPane: () => setFocusPane((p) => p === "kanban" ? "logs" : "kanban"),
+    onSwitchPane: handleSwitchPane,
     onSetLogMode: setLogMode,
     onApprove: handleApprove,
     onRetry: handleRetry,
     onKill: handleKill,
+    onDelete: handleDelete,
     onNewRun: () => {},
     onQuit: () => exit(),
     onEnterInput: () => setInputMode(true),
     onExitInput: () => setInputMode(false),
+    onBack: handleBack,
   }, focusPane, inputMode);
+
+  const showDetail = focusPane === "detail" || focusPane === "logs";
 
   return (
     <Box flexDirection="column" width={termWidth} height={termHeight}>
@@ -138,18 +180,36 @@ export function App({ store, registry, orchestrator }: AppProps) {
         focusedColumnIndex={focusedColumnIndex}
         isFocused={focusPane === "kanban"}
       />
-      <LogPane
-        selectedRun={selectedRun}
-        logMode={logMode}
-        events={events}
-        outputLines={outputLines}
-        isFocused={focusPane === "logs"}
-      />
+      {showDetail && selectedRun ? (
+        <DetailPanel
+          run={selectedRun}
+          transitions={transitions}
+          agentRuns={agentRuns}
+          isFocused={focusPane === "detail"}
+        />
+      ) : (
+        <LogPane
+          selectedRun={selectedRun}
+          logMode={logMode}
+          events={events}
+          outputLines={outputLines}
+          isFocused={focusPane === "logs"}
+        />
+      )}
+      {focusPane === "logs" && (
+        <LogPane
+          selectedRun={selectedRun}
+          logMode={logMode}
+          events={events}
+          outputLines={outputLines}
+          isFocused={true}
+        />
+      )}
       <InputBar
         isActive={inputMode}
         onSubmit={handleSendInput}
       />
-      <StatusBar inputMode={inputMode} />
+      <StatusBar inputMode={inputMode} focusPane={focusPane} />
     </Box>
   );
 }

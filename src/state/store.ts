@@ -341,6 +341,19 @@ export class StateStore {
     return rows.map(rowToWorkflowRun);
   }
 
+  getAgentRunsByWorkflow(workflowRunId: string): AgentRun[] {
+    const rows = this.db
+      .prepare("SELECT * FROM agent_runs WHERE workflow_run_id = ? ORDER BY started_at")
+      .all(workflowRunId) as AgentRunRow[];
+    return rows.map(rowToAgentRun);
+  }
+
+  deleteWorkflowRun(id: string): void {
+    this.db.prepare("DELETE FROM status_transitions WHERE workflow_run_id = ?").run(id);
+    this.db.prepare("DELETE FROM agent_runs WHERE workflow_run_id = ?").run(id);
+    this.db.prepare("DELETE FROM workflow_runs WHERE id = ?").run(id);
+  }
+
   close(): void {
     this.db.close();
   }
