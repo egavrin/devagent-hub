@@ -1,0 +1,21 @@
+{
+  "name": "devagent-hub",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "devagent-hub": "dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "bun build src/cli/index.ts --outdir dist --target bun",
+    "test": "vitest run",
+    "typecheck": "bunx tsc --noEmit",
+    "lint": "bunx eslint src/"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "bun-types": "latest",
+    "better-sqlite3": "^11.0.0",
+    "@types/better-sqlite3": "^7.6.0"
+  }
+}
