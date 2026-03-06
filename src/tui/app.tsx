@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { Box, useApp } from "ink";
+import { Box, useApp, useStdout } from "ink";
 import type { StateStore } from "../state/store.js";
 import type { ProcessRegistry } from "../runner/process-registry.js";
 import type { WorkflowOrchestrator } from "../workflow/orchestrator.js";
@@ -21,6 +21,9 @@ interface AppProps {
 
 export function App({ store, registry, orchestrator }: AppProps) {
   const { exit } = useApp();
+  const { stdout } = useStdout();
+  const termHeight = stdout?.rows ?? 40;
+  const termWidth = stdout?.columns ?? 120;
   const runs = useWorkflowRuns(store);
 
   const [focusPane, setFocusPane] = useState<FocusPane>("kanban");
@@ -127,7 +130,7 @@ export function App({ store, registry, orchestrator }: AppProps) {
   }, focusPane, inputMode);
 
   return (
-    <Box flexDirection="column" width="100%">
+    <Box flexDirection="column" width={termWidth} height={termHeight}>
       <KanbanBoard
         runs={runs}
         selectedRunId={selectedRunId}

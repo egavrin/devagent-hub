@@ -17,7 +17,8 @@ export function Column({ title, runs, selectedRunId, activeRunId, isFocused }: C
       flexDirection="column"
       borderStyle={isFocused ? "bold" : "single"}
       borderColor={isFocused ? "blue" : "gray"}
-      minWidth={16}
+      flexGrow={1}
+      flexBasis={0}
       paddingRight={1}
     >
       <Text bold color={isFocused ? "blue" : "white"}> {title} ({runs.length})</Text>

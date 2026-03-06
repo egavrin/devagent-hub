@@ -18,7 +18,7 @@ interface LogPaneProps {
 export function LogPane({ selectedRun, logMode, events, outputLines, isFocused }: LogPaneProps) {
   if (!selectedRun) {
     return (
-      <Box borderStyle="single" borderColor="gray" flexDirection="column" padding={1}>
+      <Box borderStyle="single" borderColor="gray" flexDirection="column" flexGrow={1} padding={1}>
         <Text dimColor>Select a workflow run to view logs...</Text>
       </Box>
     );
@@ -32,6 +32,7 @@ export function LogPane({ selectedRun, logMode, events, outputLines, isFocused }
       borderStyle={isFocused ? "bold" : "single"}
       borderColor={isFocused ? "blue" : "gray"}
       flexDirection="column"
+      flexGrow={1}
       padding={1}
     >
       <Box justifyContent="space-between">
@@ -40,7 +41,7 @@ export function LogPane({ selectedRun, logMode, events, outputLines, isFocused }
         </Text>
         <Text dimColor>{modeLabel}</Text>
       </Box>
-      <Box marginTop={1} flexDirection="column" height={20}>
+      <Box marginTop={1} flexDirection="column" flexGrow={1}>
         {logMode === "structured" ? (
           <StructuredView events={events} />
         ) : (
