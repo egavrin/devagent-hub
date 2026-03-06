@@ -9,7 +9,7 @@ export class StreamingLauncherAdapter {
     this.launcher = launcher;
   }
 
-  async launchAsync(params: {
+  async launch(params: {
     phase: string;
     repoPath: string;
     runId: string;

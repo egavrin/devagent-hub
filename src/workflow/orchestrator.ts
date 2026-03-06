@@ -9,7 +9,7 @@ import { defaultConfig } from "./config.js";
 export interface OrchestratorDeps {
   store: StateStore;
   github: GitHubGateway;
-  launcher: { launch(params: { phase: string; repoPath: string; runId: string; input: unknown }): LaunchResult };
+  launcher: { launch(params: { phase: string; repoPath: string; runId: string; input: unknown }): LaunchResult | Promise<LaunchResult> };
   repo: string;
   repoRoot?: string;
   config?: WorkflowConfig;
@@ -61,7 +61,7 @@ export class WorkflowOrchestrator {
     });
 
     // 4. Launch triage via launcher
-    const result = this.launcher.launch({
+    const result = await this.launcher.launch({
       phase: "triage",
       repoPath: this.repoRoot,
       runId: agentRun.id,
@@ -135,7 +135,7 @@ export class WorkflowOrchestrator {
     });
 
     // 5. Launch plan phase via launcher
-    const result = this.launcher.launch({
+    const result = await this.launcher.launch({
       phase: "plan",
       repoPath: this.repoRoot,
       runId: agentRun.id,
@@ -240,7 +240,7 @@ export class WorkflowOrchestrator {
     });
 
     // 6. Launch implement phase in worktree dir
-    const result = this.launcher.launch({
+    const result = await this.launcher.launch({
       phase: "implement",
       repoPath: workDir,
       runId: agentRun.id,
@@ -293,7 +293,7 @@ export class WorkflowOrchestrator {
     });
 
     // 4. Launch verify phase with verify commands as input
-    const result = this.launcher.launch({
+    const result = await this.launcher.launch({
       phase: "verify",
       repoPath: workDir,
       runId: agentRun.id,
@@ -403,7 +403,7 @@ export class WorkflowOrchestrator {
       phase: "review",
     });
 
-    const result = this.launcher.launch({
+    const result = await this.launcher.launch({
       phase: "review",
       repoPath: workDir,
       runId: agentRun.id,
@@ -478,7 +478,7 @@ export class WorkflowOrchestrator {
       phase: "repair",
     });
 
-    const result = this.launcher.launch({
+    const result = await this.launcher.launch({
       phase: "repair",
       repoPath: workDir,
       runId: agentRun.id,

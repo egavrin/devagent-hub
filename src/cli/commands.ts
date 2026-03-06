@@ -164,11 +164,12 @@ export async function uiCommand(args: string[]): Promise<void> {
 
   const { ProcessRegistry } = await import("../runner/process-registry.js");
   const { StreamingLauncher } = await import("../runner/streaming-launcher.js");
+  const { StreamingLauncherAdapter } = await import("../runner/streaming-adapter.js");
   const { launchTUI } = await import("../tui/index.js");
 
   const registry = new ProcessRegistry();
 
-  const launcher = new StreamingLauncher({
+  const streamingLauncher = new StreamingLauncher({
     devagentBin: "devagent",
     artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
     timeout: 10 * 60 * 1000,
@@ -179,11 +180,13 @@ export async function uiCommand(args: string[]): Promise<void> {
     registry,
   });
 
+  const adapter = new StreamingLauncherAdapter(streamingLauncher);
+
   const worktreeManager = new WorktreeManager(repoRoot);
   const orchestrator = new WorkflowOrchestrator({
     store,
     github: new GhCliGateway(),
-    launcher: { launch: () => ({ exitCode: 0, outputPath: "", eventsPath: "", output: null }) },
+    launcher: adapter,
     repo,
     repoRoot,
     config,
