@@ -6,7 +6,7 @@
     "devagent-hub": "dist/cli/index.js"
   },
   "scripts": {
-    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun",
+    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external react-devtools-core",
     "test": "vitest run",
     "typecheck": "bunx tsc --noEmit",
     "lint": "bunx eslint src/"
