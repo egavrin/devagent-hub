@@ -6,6 +6,9 @@ import { StateStore } from "../state/store.js";
 import { GhCliGateway } from "../github/gh-cli-gateway.js";
 import { WorktreeManager } from "../workspace/worktree-manager.js";
 import type { WorkflowStatus } from "../state/types.js";
+import { WorkflowOrchestrator } from "../workflow/orchestrator.js";
+import { loadWorkflowConfig } from "../workflow/config.js";
+import { RunLauncher } from "../runner/launcher.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "devagent-hub");
 const DB_PATH = join(CONFIG_DIR, "state.db");
@@ -41,64 +44,41 @@ function detectRepoRoot(): string {
 export async function runCommand(args: string[]): Promise<void> {
   const issueNumber = parseInt(args[0], 10);
   if (!issueNumber || isNaN(issueNumber)) {
-    console.error("Usage: devagent-hub run <issue-number> [--repo owner/repo]");
+    console.error("Usage: devagent-hub run <issue-number> [--repo owner/repo] [--auto-approve]");
     process.exit(1);
   }
 
   const repo = detectRepo(args);
   const repoRoot = detectRepoRoot();
   const store = createStore();
-  const gh = new GhCliGateway();
 
   try {
-    // 1. Fetch issue
-    console.log(`Fetching issue #${issueNumber} from ${repo}...`);
-    const issue = await gh.fetchIssue(repo, issueNumber);
-
-    // 2. Create workflow run
-    const run = store.createWorkflowRun({
-      issueNumber: issue.number,
-      issueUrl: issue.url,
-      repo,
-      metadata: { title: issue.title },
-    });
-    console.log(`Created workflow run: ${run.id}`);
-
-    // 3. Transition to triaged
-    store.updateStatus(run.id, "triaged", "CLI run command");
-
-    // 4. Add da:running label
-    console.log("Adding da:running label...");
-    await gh.addLabels(repo, issueNumber, ["da:running"]);
-
-    // 5. Create worktree
-    console.log("Creating worktree...");
+    const config = loadWorkflowConfig(repoRoot);
     const worktreeManager = new WorktreeManager(repoRoot);
-    const worktree = worktreeManager.create(issueNumber, repoRoot);
-    store.updateWorkflowRun(run.id, {
-      branch: worktree.branch,
-      worktreePath: worktree.path,
+    const orchestrator = new WorkflowOrchestrator({
+      store,
+      github: new GhCliGateway(),
+      launcher: new RunLauncher({
+        devagentBin: "devagent",
+        artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
+        timeout: 10 * 60 * 1000,
+        approvalMode: config.runner.approval_mode,
+        maxIterations: config.runner.max_iterations,
+      }),
+      repo,
+      repoRoot,
+      config,
+      worktreeManager,
     });
-    console.log(`Worktree created: ${worktree.path} (branch: ${worktree.branch})`);
 
-    // 6. Post triage summary as issue comment
-    const triageSummary = [
-      `## Triage Summary`,
-      ``,
-      `- **Issue:** #${issue.number} — ${issue.title}`,
-      `- **Workflow Run:** \`${run.id}\``,
-      `- **Branch:** \`${worktree.branch}\``,
-      `- **Worktree:** \`${worktree.path}\``,
-      `- **Status:** triaged`,
-    ].join("\n");
+    const autoApprove = args.includes("--auto-approve");
+    console.log(`Starting workflow for issue #${issueNumber}...`);
+    const run = await orchestrator.runWorkflow(issueNumber, { autoApprove });
 
-    console.log("Posting triage summary...");
-    await gh.addComment(repo, issueNumber, triageSummary);
-
-    // 7. Report status
-    console.log("\n--- Workflow Status ---");
-    const updated = store.getWorkflowRun(run.id);
-    console.log(JSON.stringify(updated, null, 2));
+    console.log(`\nWorkflow complete.`);
+    console.log(`  Status: ${run.status}`);
+    console.log(`  Run ID: ${run.id}`);
+    if (run.prUrl) console.log(`  PR: ${run.prUrl}`);
   } finally {
     store.close();
   }
@@ -107,55 +87,37 @@ export async function runCommand(args: string[]): Promise<void> {
 export async function triageCommand(args: string[]): Promise<void> {
   const issueNumber = parseInt(args[0], 10);
   if (!issueNumber || isNaN(issueNumber)) {
-    console.error(
-      "Usage: devagent-hub triage <issue-number> [--repo owner/repo]",
-    );
+    console.error("Usage: devagent-hub triage <issue-number> [--repo owner/repo]");
     process.exit(1);
   }
 
   const repo = detectRepo(args);
+  const repoRoot = detectRepoRoot();
   const store = createStore();
-  const gh = new GhCliGateway();
 
   try {
-    // Fetch issue
-    console.log(`Fetching issue #${issueNumber} from ${repo}...`);
-    const issue = await gh.fetchIssue(repo, issueNumber);
+    const config = loadWorkflowConfig(repoRoot);
+    const orchestrator = new WorkflowOrchestrator({
+      store,
+      github: new GhCliGateway(),
+      launcher: new RunLauncher({
+        devagentBin: "devagent",
+        artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
+        timeout: 10 * 60 * 1000,
+        approvalMode: config.runner.approval_mode,
+        maxIterations: config.runner.max_iterations,
+      }),
+      repo,
+      repoRoot,
+      config,
+    });
 
-    // Create or fetch existing workflow run
-    let run = store.getWorkflowRunByIssue(repo, issueNumber);
-    if (!run) {
-      run = store.createWorkflowRun({
-        issueNumber: issue.number,
-        issueUrl: issue.url,
-        repo,
-        metadata: { title: issue.title },
-      });
-      console.log(`Created workflow run: ${run.id}`);
-    } else {
-      console.log(`Using existing workflow run: ${run.id}`);
-    }
+    console.log(`Running triage for issue #${issueNumber}...`);
+    const run = await orchestrator.triageAndPlan(issueNumber);
 
-    // Transition to triaged
-    if (run.status === "new") {
-      store.updateStatus(run.id, "triaged", "CLI triage command");
-    }
-
-    // Add label
-    await gh.addLabels(repo, issueNumber, ["da:triaged"]);
-
-    // Post triage comment
-    const triageSummary = [
-      `## Triage Complete`,
-      ``,
-      `- **Issue:** #${issue.number} — ${issue.title}`,
-      `- **Labels:** ${issue.labels.join(", ") || "(none)"}`,
-      `- **Author:** ${issue.author}`,
-      `- **Workflow Run:** \`${run.id}\``,
-    ].join("\n");
-
-    await gh.addComment(repo, issueNumber, triageSummary);
-    console.log("Triage complete.");
+    console.log(`\nTriage complete.`);
+    console.log(`  Status: ${run.status}`);
+    console.log(`  Run ID: ${run.id}`);
   } finally {
     store.close();
   }
