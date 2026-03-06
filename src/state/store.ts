@@ -1,0 +1,347 @@
+import { Database } from "bun:sqlite";
+import type {
+  WorkflowRun,
+  WorkflowStatus,
+  AgentRun,
+  StatusTransition,
+} from "./types.js";
+
+const MIGRATIONS = `
+CREATE TABLE IF NOT EXISTS workflow_runs (
+  id TEXT PRIMARY KEY,
+  issue_number INTEGER NOT NULL,
+  issue_url TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'new',
+  branch TEXT,
+  pr_number INTEGER,
+  pr_url TEXT,
+  worktree_path TEXT,
+  current_phase TEXT,
+  repair_round INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  metadata TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY,
+  workflow_run_id TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running',
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  input_path TEXT,
+  output_path TEXT,
+  events_path TEXT,
+  iterations INTEGER,
+  cost_usd REAL,
+  FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
+);
+
+CREATE TABLE IF NOT EXISTS status_transitions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  workflow_run_id TEXT NOT NULL,
+  from_status TEXT NOT NULL,
+  to_status TEXT NOT NULL,
+  timestamp TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
+);
+`;
+
+interface WorkflowRunRow {
+  id: string;
+  issue_number: number;
+  issue_url: string;
+  repo: string;
+  status: string;
+  branch: string | null;
+  pr_number: number | null;
+  pr_url: string | null;
+  worktree_path: string | null;
+  current_phase: string | null;
+  repair_round: number;
+  created_at: string;
+  updated_at: string;
+  metadata: string;
+}
+
+interface AgentRunRow {
+  id: string;
+  workflow_run_id: string;
+  phase: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  input_path: string | null;
+  output_path: string | null;
+  events_path: string | null;
+  iterations: number | null;
+  cost_usd: number | null;
+}
+
+interface TransitionRow {
+  from_status: string;
+  to_status: string;
+  timestamp: string;
+  reason: string;
+}
+
+function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
+  return {
+    id: row.id,
+    issueNumber: row.issue_number,
+    issueUrl: row.issue_url,
+    repo: row.repo,
+    status: row.status as WorkflowStatus,
+    branch: row.branch,
+    prNumber: row.pr_number,
+    prUrl: row.pr_url,
+    worktreePath: row.worktree_path,
+    currentPhase: row.current_phase,
+    repairRound: row.repair_round,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    metadata: JSON.parse(row.metadata),
+  };
+}
+
+function rowToAgentRun(row: AgentRunRow): AgentRun {
+  return {
+    id: row.id,
+    workflowRunId: row.workflow_run_id,
+    phase: row.phase,
+    status: row.status as AgentRun["status"],
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    inputPath: row.input_path,
+    outputPath: row.output_path,
+    eventsPath: row.events_path,
+    iterations: row.iterations,
+    costUsd: row.cost_usd,
+  };
+}
+
+export class StateStore {
+  private db: Database;
+
+  constructor(dbPath: string) {
+    this.db = new Database(dbPath);
+    this.db.exec("PRAGMA journal_mode = WAL");
+    this.db.exec("PRAGMA foreign_keys = ON");
+    this.db.exec(MIGRATIONS);
+  }
+
+  createWorkflowRun(opts: {
+    issueNumber: number;
+    issueUrl: string;
+    repo: string;
+    metadata?: Record<string, unknown>;
+  }): WorkflowRun {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const metadata = JSON.stringify(opts.metadata ?? {});
+
+    this.db
+      .prepare(
+        `INSERT INTO workflow_runs (id, issue_number, issue_url, repo, status, repair_round, created_at, updated_at, metadata)
+         VALUES (?, ?, ?, ?, 'new', 0, ?, ?, ?)`
+      )
+      .run(id, opts.issueNumber, opts.issueUrl, opts.repo, now, now, metadata);
+
+    return this.getWorkflowRun(id)!;
+  }
+
+  getWorkflowRun(id: string): WorkflowRun | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM workflow_runs WHERE id = ?")
+      .get(id) as WorkflowRunRow | null;
+    return row ? rowToWorkflowRun(row) : undefined;
+  }
+
+  getWorkflowRunByIssue(
+    repo: string,
+    issueNumber: number
+  ): WorkflowRun | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM workflow_runs WHERE repo = ? AND issue_number = ? ORDER BY created_at DESC LIMIT 1"
+      )
+      .get(repo, issueNumber) as WorkflowRunRow | null;
+    return row ? rowToWorkflowRun(row) : undefined;
+  }
+
+  updateStatus(
+    id: string,
+    to: WorkflowStatus,
+    reason: string
+  ): WorkflowRun {
+    const current = this.getWorkflowRun(id);
+    if (!current) {
+      throw new Error(`Workflow run not found: ${id}`);
+    }
+
+    const now = new Date().toISOString();
+    const from = current.status;
+
+    this.db
+      .prepare(
+        "UPDATE workflow_runs SET status = ?, updated_at = ? WHERE id = ?"
+      )
+      .run(to, now, id);
+
+    this.db
+      .prepare(
+        `INSERT INTO status_transitions (workflow_run_id, from_status, to_status, timestamp, reason)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(id, from, to, now, reason);
+
+    return this.getWorkflowRun(id)!;
+  }
+
+  updateWorkflowRun(
+    id: string,
+    fields: Partial<
+      Pick<
+        WorkflowRun,
+        | "branch"
+        | "prNumber"
+        | "prUrl"
+        | "worktreePath"
+        | "currentPhase"
+        | "repairRound"
+        | "metadata"
+      >
+    >
+  ): WorkflowRun {
+    const current = this.getWorkflowRun(id);
+    if (!current) {
+      throw new Error(`Workflow run not found: ${id}`);
+    }
+
+    const now = new Date().toISOString();
+    const sets: string[] = ["updated_at = ?"];
+    const values: (string | number | null)[] = [now];
+
+    if (fields.branch !== undefined) {
+      sets.push("branch = ?");
+      values.push(fields.branch);
+    }
+    if (fields.prNumber !== undefined) {
+      sets.push("pr_number = ?");
+      values.push(fields.prNumber);
+    }
+    if (fields.prUrl !== undefined) {
+      sets.push("pr_url = ?");
+      values.push(fields.prUrl);
+    }
+    if (fields.worktreePath !== undefined) {
+      sets.push("worktree_path = ?");
+      values.push(fields.worktreePath);
+    }
+    if (fields.currentPhase !== undefined) {
+      sets.push("current_phase = ?");
+      values.push(fields.currentPhase);
+    }
+    if (fields.repairRound !== undefined) {
+      sets.push("repair_round = ?");
+      values.push(fields.repairRound);
+    }
+    if (fields.metadata !== undefined) {
+      sets.push("metadata = ?");
+      values.push(JSON.stringify(fields.metadata));
+    }
+
+    values.push(id);
+    this.db
+      .prepare(`UPDATE workflow_runs SET ${sets.join(", ")} WHERE id = ?`)
+      .run(...values);
+
+    return this.getWorkflowRun(id)!;
+  }
+
+  createAgentRun(opts: {
+    workflowRunId: string;
+    phase: string;
+    inputPath?: string;
+  }): AgentRun {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    this.db
+      .prepare(
+        `INSERT INTO agent_runs (id, workflow_run_id, phase, status, started_at, input_path)
+         VALUES (?, ?, ?, 'running', ?, ?)`
+      )
+      .run(id, opts.workflowRunId, opts.phase, now, opts.inputPath ?? null);
+
+    return this.getAgentRun(id)!;
+  }
+
+  getAgentRun(id: string): AgentRun | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM agent_runs WHERE id = ?")
+      .get(id) as AgentRunRow | null;
+    return row ? rowToAgentRun(row) : undefined;
+  }
+
+  completeAgentRun(
+    id: string,
+    result: {
+      status: "success" | "failed" | "timeout";
+      outputPath?: string;
+      eventsPath?: string;
+      iterations?: number;
+      costUsd?: number;
+    }
+  ): AgentRun {
+    const now = new Date().toISOString();
+
+    this.db
+      .prepare(
+        `UPDATE agent_runs
+         SET status = ?, finished_at = ?, output_path = ?, events_path = ?, iterations = ?, cost_usd = ?
+         WHERE id = ?`
+      )
+      .run(
+        result.status,
+        now,
+        result.outputPath ?? null,
+        result.eventsPath ?? null,
+        result.iterations ?? null,
+        result.costUsd ?? null,
+        id
+      );
+
+    return this.getAgentRun(id)!;
+  }
+
+  getTransitions(workflowRunId: string): StatusTransition[] {
+    const rows = this.db
+      .prepare(
+        "SELECT from_status, to_status, timestamp, reason FROM status_transitions WHERE workflow_run_id = ? ORDER BY id"
+      )
+      .all(workflowRunId) as TransitionRow[];
+
+    return rows.map((row) => ({
+      from: row.from_status as WorkflowStatus,
+      to: row.to_status as WorkflowStatus,
+      timestamp: row.timestamp,
+      reason: row.reason,
+    }));
+  }
+
+  listByStatus(status: WorkflowStatus): WorkflowRun[] {
+    const rows = this.db
+      .prepare("SELECT * FROM workflow_runs WHERE status = ? ORDER BY created_at")
+      .all(status) as WorkflowRunRow[];
+
+    return rows.map(rowToWorkflowRun);
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
