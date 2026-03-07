@@ -17,6 +17,24 @@ function parseJSON<T>(raw: string): T {
   return JSON.parse(raw) as T;
 }
 
+interface ApiIssue {
+  number: number;
+  title: string;
+  body: string | null;
+  labels: { name: string }[];
+  html_url: string;
+  state: string;
+  user: { login: string };
+  created_at: string;
+}
+
+interface ApiComment {
+  id: number;
+  user: { login: string };
+  body: string;
+  created_at: string;
+}
+
 interface GhIssue {
   number: number;
   title: string;
@@ -95,39 +113,52 @@ function mapCheck(c: GhCheck): GitHubCheck {
 
 export class GhCliGateway implements GitHubGateway {
   async fetchIssue(repo: string, number: number): Promise<GitHubIssue> {
-    const raw = gh(
-      [
-        "issue",
-        "view",
-        String(number),
-        "--json",
-        "number,title,body,labels,url,state,author,createdAt,comments",
-      ],
-      repo,
-    );
-    return mapIssue(parseJSON<GhIssue>(raw));
+    // Use REST API to avoid GraphQL Projects Classic deprecation errors
+    const raw = gh(["api", `repos/${repo}/issues/${number}`]);
+    const issue = parseJSON<ApiIssue>(raw);
+    const commentsRaw = gh(["api", `repos/${repo}/issues/${number}/comments`]);
+    const comments = parseJSON<ApiComment[]>(commentsRaw);
+    return {
+      number: issue.number,
+      title: issue.title,
+      body: issue.body ?? "",
+      labels: issue.labels.map((l: { name: string }) => l.name),
+      url: issue.html_url,
+      state: issue.state as "open" | "closed",
+      author: issue.user.login,
+      createdAt: issue.created_at,
+      comments: comments.map((c) => ({
+        id: c.id,
+        author: c.user.login,
+        body: c.body,
+        createdAt: c.created_at,
+      })),
+    };
   }
 
   async fetchEligibleIssues(
     repo: string,
     labels: string[],
   ): Promise<GitHubIssue[]> {
-    const raw = gh(
-      [
-        "issue",
-        "list",
-        "--state",
-        "open",
-        "--label",
-        labels.join(","),
-        "--json",
-        "number,title,body,labels,url,state,author,createdAt,comments",
-        "--limit",
-        "50",
-      ],
-      repo,
-    );
-    return parseJSON<GhIssue[]>(raw).map(mapIssue);
+    const labelParam = labels.join(",");
+    const raw = gh([
+      "api", `repos/${repo}/issues`,
+      "-f", "state=open",
+      "-f", `labels=${labelParam}`,
+      "-f", "per_page=50",
+    ]);
+    const issues = parseJSON<ApiIssue[]>(raw);
+    return issues.map((issue) => ({
+      number: issue.number,
+      title: issue.title,
+      body: issue.body ?? "",
+      labels: issue.labels.map((l: { name: string }) => l.name),
+      url: issue.html_url,
+      state: issue.state as "open" | "closed",
+      author: issue.user.login,
+      createdAt: issue.created_at,
+      comments: [],
+    }));
   }
 
   async addComment(
@@ -135,7 +166,7 @@ export class GhCliGateway implements GitHubGateway {
     issueNumber: number,
     body: string,
   ): Promise<void> {
-    gh(["issue", "comment", String(issueNumber), "--body", body], repo);
+    gh(["api", `repos/${repo}/issues/${issueNumber}/comments`, "-f", `body=${body}`]);
   }
 
   async addLabels(
@@ -143,10 +174,10 @@ export class GhCliGateway implements GitHubGateway {
     issueNumber: number,
     labels: string[],
   ): Promise<void> {
-    gh(
-      ["issue", "edit", String(issueNumber), "--add-label", labels.join(",")],
-      repo,
-    );
+    execFileSync("gh", ["api", `repos/${repo}/issues/${issueNumber}/labels`, "--input", "-"], {
+      encoding: "utf-8",
+      input: JSON.stringify({ labels }),
+    });
   }
 
   async removeLabels(
@@ -154,16 +185,13 @@ export class GhCliGateway implements GitHubGateway {
     issueNumber: number,
     labels: string[],
   ): Promise<void> {
-    gh(
-      [
-        "issue",
-        "edit",
-        String(issueNumber),
-        "--remove-label",
-        labels.join(","),
-      ],
-      repo,
-    );
+    for (const label of labels) {
+      try {
+        gh(["api", `repos/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`, "-X", "DELETE"]);
+      } catch {
+        // Label may not exist on issue
+      }
+    }
   }
 
   async createPR(repo: string, params: CreatePRParams): Promise<GitHubPR> {
