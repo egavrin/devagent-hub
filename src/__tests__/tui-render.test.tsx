@@ -9,6 +9,10 @@ import { TimelinePane } from "../tui/components/timeline-pane.js";
 import { WhyPausedPanel } from "../tui/components/why-paused-panel.js";
 import { AutopilotBar } from "../tui/components/autopilot-bar.js";
 import { ApprovalQueueView, resolveInboxItem } from "../tui/components/approval-queue-view.js";
+import { NewRunDialog } from "../tui/components/new-run-dialog.js";
+import { RunnersView } from "../tui/components/runners-view.js";
+import type { RunnerInfo } from "../tui/components/runners-view.js";
+import { defaultConfig } from "../workflow/config.js";
 import type { WorkflowRun, Artifact, AgentRun, StatusTransition, ApprovalRequest } from "../state/types.js";
 
 // ─── Test fixtures ──────────────────────────────────────────
@@ -603,5 +607,129 @@ describe("ApprovalQueueView render", () => {
       <ApprovalQueueView items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={reviewRuns} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
     );
     expect(lastFrame()!).toContain("[W]");
+  });
+});
+
+// ─── NewRunDialog ──────────────────────────────────────────
+
+describe("NewRunDialog render", () => {
+  const noop = () => {};
+  const baseForm = { sourceType: "issue" as const, sourceId: "", mode: "assisted" as const, profile: "", runner: "", model: "" };
+
+  it("renders source type options", () => {
+    const { lastFrame } = render(
+      <NewRunDialog form={baseForm} profiles={[]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onSubmit={noop} onCancel={noop} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Issue");
+    expect(frame).toContain("PR");
+  });
+
+  it("renders mode options including autopilot-once", () => {
+    const { lastFrame } = render(
+      <NewRunDialog form={baseForm} profiles={[]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onSubmit={noop} onCancel={noop} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Assisted");
+    expect(frame).toContain("Watch");
+    expect(frame).toContain("Auto-once");
+  });
+
+  it("shows profiles when available", () => {
+    const { lastFrame } = render(
+      <NewRunDialog form={baseForm} profiles={["fast", "strong"]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onSubmit={noop} onCancel={noop} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("fast");
+    expect(frame).toContain("strong");
+    expect(frame).toContain("default");
+  });
+
+  it("shows runner selection when multiple runners", () => {
+    const { lastFrame } = render(
+      <NewRunDialog form={baseForm} profiles={[]} runners={["devagent", "claude"]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onSubmit={noop} onCancel={noop} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Runner");
+    expect(frame).toContain("devagent");
+    expect(frame).toContain("claude");
+  });
+
+  it("hides runner selection with single runner", () => {
+    const { lastFrame } = render(
+      <NewRunDialog form={baseForm} profiles={[]} runners={["devagent"]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onSubmit={noop} onCancel={noop} />,
+    );
+    expect(lastFrame()!).not.toContain("Runner");
+  });
+
+  it("shows model override field", () => {
+    const { lastFrame } = render(
+      <NewRunDialog form={baseForm} profiles={[]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onSubmit={noop} onCancel={noop} />,
+    );
+    expect(lastFrame()!).toContain("Model");
+  });
+});
+
+// ─── RunnersView ───────────────────────────────────────────
+
+describe("RunnersView render", () => {
+  const config = defaultConfig();
+
+  it("renders profile list", () => {
+    const { lastFrame } = render(
+      <RunnersView config={config} height={30} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Profiles");
+    expect(frame).toContain("default");
+  });
+
+  it("renders roles section", () => {
+    const { lastFrame } = render(
+      <RunnersView config={config} height={30} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Roles");
+    expect(frame).toContain("triage");
+    expect(frame).toContain("implement");
+  });
+
+  it("renders live runners when provided", () => {
+    const infos: RunnerInfo[] = [
+      { bin: "claude", version: "2.1", supportedPhases: ["triage", "plan"], availableProviders: ["anthropic"], supportedApprovalModes: ["full-auto"], healthy: true },
+      { bin: "devagent", version: null, supportedPhases: [], availableProviders: [], supportedApprovalModes: [], healthy: false },
+    ];
+    const { lastFrame } = render(
+      <RunnersView config={config} runnerInfos={infos} height={30} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Live Runners");
+    expect(frame).toContain("claude");
+    expect(frame).toContain("v2.1");
+    expect(frame).toContain("anthropic");
+  });
+
+  it("shows current assignments", () => {
+    const runs = [makeRun({ agentProfile: "default", status: "implementing", currentPhase: "implement" })];
+    const { lastFrame } = render(
+      <RunnersView config={config} runs={runs} height={30} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Current Assignments");
+    expect(frame).toContain("#42");
+  });
+
+  it("shows failure rates from agent runs", () => {
+    const agentRunsList = [
+      makeAgentRun({ profile: "default", status: "success" }),
+      makeAgentRun({ id: "a2", profile: "default", status: "failed" }),
+      makeAgentRun({ id: "a3", profile: "default", status: "success" }),
+    ];
+    const { lastFrame } = render(
+      <RunnersView config={config} agentRuns={agentRunsList} height={30} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("fail");
+    expect(frame).toContain("33%");
   });
 });

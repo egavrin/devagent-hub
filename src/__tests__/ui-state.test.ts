@@ -157,6 +157,21 @@ describe("uiReducer", () => {
       expect(s.newRunForm.mode).toBe("watch");
     });
 
+    it("SET_NEW_RUN_RUNNER changes runner", () => {
+      const s = dispatch(initialUIState, { type: "SET_NEW_RUN_RUNNER", runner: "claude" });
+      expect(s.newRunForm.runner).toBe("claude");
+    });
+
+    it("SET_NEW_RUN_MODEL changes model", () => {
+      const s = dispatch(initialUIState, { type: "SET_NEW_RUN_MODEL", model: "opus" });
+      expect(s.newRunForm.model).toBe("opus");
+    });
+
+    it("SET_NEW_RUN_MODE supports autopilot-once", () => {
+      const s = dispatch(initialUIState, { type: "SET_NEW_RUN_MODE", mode: "autopilot-once" });
+      expect(s.newRunForm.mode).toBe("autopilot-once");
+    });
+
     it("form fields are independent", () => {
       const s = dispatch(initialUIState,
         { type: "SET_NEW_RUN_SOURCE_TYPE", sourceType: "pr" },
@@ -164,6 +179,16 @@ describe("uiReducer", () => {
         { type: "SET_NEW_RUN_MODE", mode: "watch" },
       );
       expect(s.newRunForm).toEqual({ sourceType: "pr", sourceId: "99", mode: "watch", profile: "", runner: "", model: "" });
+    });
+
+    it("OPEN_DIALOG new-run resets runner and model", () => {
+      const withData = {
+        ...initialUIState,
+        newRunForm: { sourceType: "pr" as const, sourceId: "42", mode: "watch" as const, profile: "fast", runner: "claude", model: "opus" },
+      };
+      const s = dispatch(withData, { type: "OPEN_DIALOG", dialog: "new-run" });
+      expect(s.newRunForm.runner).toBe("");
+      expect(s.newRunForm.model).toBe("");
     });
   });
 
