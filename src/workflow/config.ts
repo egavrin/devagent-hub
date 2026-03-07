@@ -12,6 +12,12 @@ const VALID_REASONING_LEVELS = new Set([
   "low", "medium", "high", "xhigh",
 ]);
 
+export const VALID_MODES = new Set([
+  "assisted", "watch",
+] as const);
+
+export type WorkflowMode = "assisted" | "watch";
+
 export class WorkflowConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -21,6 +27,7 @@ export class WorkflowConfigError extends Error {
 
 export interface WorkflowConfig {
   version: number;
+  mode: WorkflowMode;
   tracker: { kind: string; issue_labels_include: string[] };
   dispatch: { max_concurrency: number };
   workspace: { mode: string; root: string };
@@ -35,6 +42,7 @@ export interface WorkflowConfig {
 export function defaultConfig(): WorkflowConfig {
   return {
     version: 1,
+    mode: "assisted",
     tracker: { kind: "github", issue_labels_include: ["devagent"] },
     dispatch: { max_concurrency: 4 },
     workspace: { mode: "worktree", root: "." },
@@ -57,6 +65,12 @@ export function defaultConfig(): WorkflowConfig {
  * Called after parsing to ensure no invalid values reach the subprocess.
  */
 export function validateConfig(config: WorkflowConfig): void {
+  if (!VALID_MODES.has(config.mode)) {
+    throw new WorkflowConfigError(
+      `Invalid mode "${config.mode}". Valid modes: ${[...VALID_MODES].join(", ")}`,
+    );
+  }
+
   if (!VALID_APPROVAL_MODES.has(config.runner.approval_mode)) {
     throw new WorkflowConfigError(
       `Invalid runner.approval_mode "${config.runner.approval_mode}". ` +

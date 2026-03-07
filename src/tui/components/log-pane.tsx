@@ -3,7 +3,7 @@ import { Box, Text } from "ink";
 import type { WorkflowRun } from "../../state/types.js";
 import type { AgentEvent } from "../event-parser.js";
 import type { OutputLine } from "../hooks/use-process-output.js";
-import type { LogMode } from "../hooks/use-keybindings.js";
+import type { LogMode } from "../state.js";
 import { StructuredView } from "./structured-view.js";
 import { RawLogView } from "./raw-log-view.js";
 

@@ -7,7 +7,7 @@
 // ─── Valid values (must match DevAgent's workflow-contract.ts) ────
 
 const VALID_PHASES = new Set([
-  "triage", "plan", "implement", "verify", "review", "repair",
+  "triage", "plan", "implement", "verify", "review", "repair", "gate",
 ]);
 
 const VALID_APPROVAL_MODES = new Set([

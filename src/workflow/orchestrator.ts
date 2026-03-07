@@ -4,8 +4,18 @@ import type { WorkflowConfig } from "./config.js";
 import type { WorkflowRun } from "../state/types.js";
 import type { LaunchResult } from "../runner/launcher.js";
 import type { WorktreeManager } from "../workspace/worktree-manager.js";
+import type { ReviewGate, GateVerdict } from "./review-gate.js";
 import { defaultConfig } from "./config.js";
-import { assertTransition } from "./state-machine.js";
+import { execFileSync } from "node:child_process";
+
+export interface Finding {
+  file: string;
+  line: number;
+  severity: string;
+  message: string;
+  category: string;
+  author?: string;
+}
 
 /** Best-effort GitHub call — logs error but does not throw. */
 async function safeGitHub<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
@@ -26,6 +36,7 @@ export interface OrchestratorDeps {
   repoRoot?: string;
   config?: WorkflowConfig;
   worktreeManager?: WorktreeManager;
+  reviewGate?: ReviewGate;
 }
 
 export class WorkflowOrchestrator {
@@ -36,6 +47,7 @@ export class WorkflowOrchestrator {
   private repoRoot: string;
   private config: WorkflowConfig;
   private worktreeManager?: WorktreeManager;
+  private reviewGate?: ReviewGate;
 
   constructor(deps: OrchestratorDeps) {
     this.store = deps.store;
@@ -45,6 +57,39 @@ export class WorkflowOrchestrator {
     this.repoRoot = deps.repoRoot ?? ".";
     this.config = deps.config ?? defaultConfig();
     this.worktreeManager = deps.worktreeManager;
+    this.reviewGate = deps.reviewGate;
+  }
+
+  private get isWatchMode(): boolean {
+    return this.config.mode === "watch" && this.reviewGate !== undefined;
+  }
+
+  /**
+   * Run a review gate on a stage's output. Stores gate_verdict artifact.
+   * Returns the verdict.
+   */
+  private async runGate(
+    phase: string,
+    output: Record<string, unknown>,
+    workflowRunId: string,
+    issueNumber: number,
+    repoPath?: string,
+  ): Promise<GateVerdict> {
+    const verdict = await this.reviewGate!.evaluate(phase, output, {
+      workflowRunId,
+      repoPath: repoPath ?? this.repoRoot,
+      issueNumber,
+    });
+
+    this.store.createArtifact({
+      workflowRunId,
+      type: "gate_verdict",
+      phase,
+      summary: verdict.reason,
+      data: { action: verdict.action, reason: verdict.reason, findings: verdict.findings },
+    });
+
+    return verdict;
   }
 
   private setupWorktree(issueNumber: number, wfRunId: string): string {
@@ -446,8 +491,10 @@ export class WorkflowOrchestrator {
     const branch = workflowRun.branch ?? `da/issue-${issueNumber}`;
     const workDir = workflowRun.worktreePath ?? this.repoRoot;
 
-    // 3. Push branch
-    await this.github.pushBranch(workDir, branch);
+    // 3. Push branch (commit uncommitted changes first)
+    const implArtifact = this.store.getLatestArtifact(workflowRun.id, "implementation_report");
+    const commitMsg = (implArtifact?.data?.suggestedCommitMessage as string) ?? `feat: devagent changes for #${issueNumber}`;
+    await this.github.pushBranch(workDir, branch, commitMsg);
 
     // 4. Fetch issue for title
     const issue = await this.github.fetchIssue(this.repo, issueNumber);
@@ -658,71 +705,69 @@ export class WorkflowOrchestrator {
   }
 
   /**
-   * Resolve PR review comments by running a repair phase with the comments as findings.
-   * Works on an existing workflow run that has a PR open.
+   * Shared helper: validate status, check conflicts, run repair agent, push fixes.
+   * Returns the updated workflow run.
    */
-  async resolveComments(issueNumber: number): Promise<WorkflowRun> {
-    const wfRun = this.store.getWorkflowRunByIssue(this.repo, issueNumber);
-    if (!wfRun) throw new Error(`No workflow run for issue #${issueNumber}`);
-    if (!wfRun.prNumber) throw new Error(`No PR associated with issue #${issueNumber}`);
-
-    // Fetch review comments from GitHub
-    const reviewComments = await this.github.fetchPRReviewComments(this.repo, wfRun.prNumber);
-    if (reviewComments.length === 0) {
-      console.log("No review comments found on PR.");
-      return wfRun;
-    }
-
-    // Convert review comments to findings format for the repair phase
-    const findings = reviewComments.map((c) => ({
-      file: "",
-      line: 0,
-      severity: "major" as const,
-      message: c.body,
-      category: "review-comment",
-      author: c.author,
-    }));
-
-    // Transition to auto_review_fix_loop if needed
-    const validSourceStatuses = ["draft_pr_opened", "awaiting_human_review", "auto_review_fix_loop"];
-    if (!validSourceStatuses.includes(wfRun.status)) {
+  private async repairFromFindings(
+    wfRun: WorkflowRun,
+    issueNumber: number,
+    findings: Finding[],
+    label: string,
+  ): Promise<{ run: WorkflowRun; summary: string }> {
+    const validStatuses = ["draft_pr_opened", "awaiting_human_review", "auto_review_fix_loop"];
+    if (!validStatuses.includes(wfRun.status)) {
       throw new Error(
-        `Cannot resolve comments: status is "${wfRun.status}". Expected one of: ${validSourceStatuses.join(", ")}`,
+        `Cannot ${label}: status is "${wfRun.status}". Expected one of: ${validStatuses.join(", ")}`,
       );
     }
     if (wfRun.status !== "auto_review_fix_loop") {
-      this.store.updateStatus(wfRun.id, "auto_review_fix_loop", "Resolving PR review comments");
+      this.store.updateStatus(wfRun.id, "auto_review_fix_loop", label);
     }
 
     const workDir = wfRun.worktreePath ?? this.repoRoot;
-    const currentRound = wfRun.repairRound + 1;
+    const branch = wfRun.branch ?? `da/issue-${issueNumber}`;
 
-    const agentRun = this.store.createAgentRun({
-      workflowRunId: wfRun.id,
-      phase: "repair",
-    });
+    // Check for branch conflicts — add to findings for the repair agent
+    const conflictCheck = await safeGitHub(
+      () => this.github.checkBranchConflicts(workDir, branch, "main"),
+      { conflicted: false, conflictFiles: [] },
+    );
+    if (conflictCheck.conflicted) {
+      if (conflictCheck.conflictFiles.length > 0) {
+        for (const f of conflictCheck.conflictFiles) {
+          findings.push({
+            file: f, line: 0, severity: "critical",
+            message: "Merge conflict with main — run 'git fetch origin main && git rebase origin/main' and resolve conflicts in this file",
+            category: "merge-conflict",
+          });
+        }
+      } else {
+        findings.push({
+          file: "", line: 0, severity: "critical",
+          message: "Branch conflicts with main. Run 'git fetch origin main && git rebase origin/main' and resolve all merge conflicts.",
+          category: "merge-conflict",
+        });
+      }
+    }
+
+    const currentRound = wfRun.repairRound + 1;
+    const agentRun = this.store.createAgentRun({ workflowRunId: wfRun.id, phase: "repair" });
     this.store.updateWorkflowRun(wfRun.id, { currentPhase: "repair" });
 
-    // Store a synthetic review_report artifact so repair can reference it
     this.store.createArtifact({
       workflowRunId: wfRun.id,
       agentRunId: agentRun.id,
       type: "review_report",
       phase: "review",
-      summary: `${reviewComments.length} PR review comment(s) to resolve`,
-      data: { findings, verdict: "block", blockingCount: reviewComments.length },
+      summary: `${label}${conflictCheck.conflicted ? " + branch conflicts" : ""}`,
+      data: { findings, verdict: "block", blockingCount: findings.length },
     });
 
     const result = await this.launcher.launch({
       phase: "repair",
       repoPath: workDir,
       runId: agentRun.id,
-      input: {
-        round: currentRound,
-        issueNumber,
-        prNumber: wfRun.prNumber,
-        findings,
-      },
+      input: { round: currentRound, issueNumber, prNumber: wfRun.prNumber, findings },
     });
 
     this.store.completeAgentRun(agentRun.id, {
@@ -730,16 +775,15 @@ export class WorkflowOrchestrator {
       outputPath: result.outputPath,
       eventsPath: result.eventsPath,
     });
-
     this.store.updateWorkflowRun(wfRun.id, { repairRound: currentRound });
 
     if (result.exitCode !== 0) {
       this.store.updateStatus(wfRun.id, "failed", `Repair round ${currentRound} failed`);
-      return this.store.getWorkflowRun(wfRun.id)!;
+      return { run: this.store.getWorkflowRun(wfRun.id)!, summary: "" };
     }
 
     const output = result.output as Record<string, unknown> | null;
-    const summary = (output?.summary as string) ?? `Resolved review comments (round ${currentRound}).`;
+    const summary = (output?.summary as string) ?? `${label} (round ${currentRound}) complete.`;
 
     this.store.createArtifact({
       workflowRunId: wfRun.id,
@@ -751,8 +795,6 @@ export class WorkflowOrchestrator {
       filePath: result.outputPath,
     });
 
-    // Push fixes
-    const branch = wfRun.branch ?? `da/issue-${issueNumber}`;
     try {
       await this.github.pushBranch(workDir, branch);
     } catch (err) {
@@ -760,16 +802,175 @@ export class WorkflowOrchestrator {
       process.stderr.write(`[orchestrator] Failed to push fixes: ${msg}\n`);
     }
 
+    return { run: this.store.getWorkflowRun(wfRun.id)!, summary };
+  }
+
+  /**
+   * Resolve PR review comments by running a repair phase with the comments as findings.
+   */
+  async resolveComments(issueNumber: number): Promise<WorkflowRun> {
+    const wfRun = this.store.getWorkflowRunByIssue(this.repo, issueNumber);
+    if (!wfRun) throw new Error(`No workflow run for issue #${issueNumber}`);
+    if (!wfRun.prNumber) throw new Error(`No PR associated with issue #${issueNumber}`);
+
+    const reviewComments = await this.github.fetchPRReviewComments(this.repo, wfRun.prNumber);
+    if (reviewComments.length === 0) {
+      process.stderr.write("[orchestrator] No review comments found on PR.\n");
+      return wfRun;
+    }
+
+    const findings: Finding[] = reviewComments.map((c) => ({
+      file: "", line: 0, severity: "major",
+      message: c.body, category: "review-comment", author: c.author,
+    }));
+
+    const { run, summary } = await this.repairFromFindings(
+      wfRun, issueNumber, findings,
+      `${reviewComments.length} PR review comment(s) to resolve`,
+    );
+
+    if (run.status === "failed") return run;
+
+    // Resolve review threads on GitHub
+    const commentNodeIds = reviewComments
+      .map((c) => c.nodeId)
+      .filter((id): id is string => id !== undefined);
+    if (commentNodeIds.length > 0) {
+      await safeGitHub(
+        () => this.github.resolveReviewThreads(this.repo, wfRun.prNumber!, commentNodeIds),
+        undefined,
+      );
+    }
+
     await safeGitHub(() => this.github.addComment(
       this.repo, issueNumber,
-      `**DevAgent resolved review comments (round ${currentRound})**\n\n${summary}`,
+      `**DevAgent resolved review comments**\n\n${summary}`,
     ), undefined);
 
-    this.store.updateStatus(wfRun.id, "draft_pr_opened", `Review comments resolved (round ${currentRound})`);
+    this.store.updateStatus(wfRun.id, "draft_pr_opened", "Review comments resolved");
     return this.store.getWorkflowRun(wfRun.id)!;
   }
 
+  /**
+   * Fix CI failures on a PR by fetching failed check logs, running repair, and pushing.
+   * Optionally marks the PR as ready (undraft) when CI passes.
+   */
+  async fixCI(issueNumber: number, options: { markReady?: boolean } = {}): Promise<WorkflowRun> {
+    const wfRun = this.store.getWorkflowRunByIssue(this.repo, issueNumber);
+    if (!wfRun) throw new Error(`No workflow run for issue #${issueNumber}`);
+    if (!wfRun.prNumber) throw new Error(`No PR associated with issue #${issueNumber}`);
+
+    const failureLogs = await this.github.fetchCIFailureLogs(this.repo, wfRun.prNumber);
+    if (failureLogs.length === 0) {
+      process.stderr.write("[orchestrator] No CI failures found on PR.\n");
+      if (options.markReady) {
+        await safeGitHub(() => this.github.markPRReady(this.repo, wfRun.prNumber!), undefined);
+        await safeGitHub(() => this.github.addComment(
+          this.repo, issueNumber,
+          "**CI passed.** PR marked as ready for review.",
+        ), undefined);
+        this.store.updateStatus(wfRun.id, "awaiting_human_review", "CI passed, PR ready");
+      }
+      return this.store.getWorkflowRun(wfRun.id) ?? wfRun;
+    }
+
+    const findings: Finding[] = failureLogs.map((f) => ({
+      file: "", line: 0, severity: "critical",
+      message: `CI check "${f.check}" failed.\n\nFailed log output:\n${f.log}`,
+      category: "ci-failure",
+    }));
+
+    const { run, summary } = await this.repairFromFindings(
+      wfRun, issueNumber, findings,
+      `${failureLogs.length} CI failure(s) to fix`,
+    );
+
+    if (run.status === "failed") return run;
+
+    await safeGitHub(() => this.github.addComment(
+      this.repo, issueNumber,
+      `**DevAgent CI fix**\n\n${summary}`,
+    ), undefined);
+
+    this.store.updateStatus(wfRun.id, "draft_pr_opened", "CI fix complete");
+    return this.store.getWorkflowRun(wfRun.id)!;
+  }
+
+  /**
+   * Poll CI checks until they complete, then fix failures if any.
+   * Returns the updated run. Used in watch mode after PR open and after repairs.
+   */
+  private async waitForCIAndFix(issueNumber: number, run: WorkflowRun): Promise<WorkflowRun> {
+    if (!run.prNumber) return run;
+    const prNumber = run.prNumber;
+    const maxCIRounds = this.config.repair.max_rounds;
+
+    for (let round = 0; round <= maxCIRounds; round++) {
+      // Poll until checks complete
+      const checks = await this.pollCIChecks(prNumber);
+      const failed = checks.filter((c) => c.conclusion === "failure");
+
+      if (failed.length === 0) {
+        process.stderr.write(`[orchestrator] CI passed for PR #${run.prNumber}\n`);
+        return this.store.getWorkflowRun(run.id)!;
+      }
+
+      process.stderr.write(
+        `[orchestrator] CI failed (${failed.map((c) => c.name).join(", ")}), repair round ${round + 1}/${maxCIRounds + 1}\n`,
+      );
+
+      if (round === maxCIRounds) {
+        this.store.updateStatus(run.id, "escalated", `CI still failing after ${maxCIRounds + 1} fix attempts`);
+        await safeGitHub(() => this.github.addComment(
+          this.repo, issueNumber,
+          `**CI still failing after ${maxCIRounds + 1} fix attempts.** Escalating for human review.`,
+        ), undefined);
+        return this.store.getWorkflowRun(run.id)!;
+      }
+
+      // Fix CI failures
+      run = await this.fixCI(issueNumber);
+      if (run.status === "failed" || run.status === "escalated") return run;
+    }
+
+    return this.store.getWorkflowRun(run.id)!;
+  }
+
+  /**
+   * Poll PR checks until all are completed (no more in_progress).
+   * Returns the final check states.
+   */
+  private async pollCIChecks(prNumber: number): Promise<{ name: string; status: string; conclusion: string | null }[]> {
+    const maxWait = 10 * 60_000; // 10 minutes
+    const interval = 30_000; // 30 seconds
+    const start = Date.now();
+
+    while (Date.now() - start < maxWait) {
+      const checks = await this.github.fetchPRChecks(this.repo, prNumber);
+      const pending = checks.filter((c) => c.status !== "completed");
+      if (pending.length === 0) return checks;
+
+      process.stderr.write(
+        `[orchestrator] Waiting for ${pending.length} CI check(s)...\n`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, interval));
+    }
+
+    // Timeout — return whatever we have
+    return this.github.fetchPRChecks(this.repo, prNumber);
+  }
+
   async runWorkflow(
+    issueNumber: number,
+    options: { autoApprove?: boolean } = {},
+  ): Promise<WorkflowRun> {
+    if (this.isWatchMode) {
+      return this.runWorkflowWatch(issueNumber);
+    }
+    return this.runWorkflowAssisted(issueNumber, options);
+  }
+
+  private async runWorkflowAssisted(
     issueNumber: number,
     options: { autoApprove?: boolean } = {},
   ): Promise<WorkflowRun> {
@@ -823,5 +1024,152 @@ export class WorkflowOrchestrator {
     // If we exhausted the loop without resolution, return current state
     const finalRun = this.store.getWorkflowRunByIssue(this.repo, issueNumber);
     return finalRun!;
+  }
+
+  /**
+   * Watch mode workflow: inter-stage gates replace human approval.
+   * Gates evaluate each stage's output; on "proceed" the workflow continues,
+   * on "rework" the stage is retried (up to max_rounds), on "escalate" the run stops.
+   */
+  private async runWorkflowWatch(issueNumber: number): Promise<WorkflowRun> {
+    const maxGateReworks = this.config.repair.max_rounds;
+
+    // Phase 1: Triage + gate
+    let run = await this.triage(issueNumber);
+    if (run.status === "failed") return run;
+
+    const triageOutput = this.store.getLatestArtifact(run.id, "triage_report");
+    const triageVerdict = await this.runGate("triage", triageOutput?.data ?? {}, run.id, issueNumber);
+    if (triageVerdict.action === "escalate") {
+      this.store.updateStatus(run.id, "escalated", triageVerdict.reason);
+      await safeGitHub(() => this.github.addComment(
+        this.repo, issueNumber,
+        `**Gate: triage rejected.** ${triageVerdict.reason}`,
+      ), undefined);
+      return this.store.getWorkflowRun(run.id)!;
+    }
+
+    // Phase 2: Plan + gate (with rework loop)
+    for (let attempt = 0; attempt <= maxGateReworks; attempt++) {
+      run = await this.plan(issueNumber);
+      if (run.status === "failed") return run;
+
+      const planOutput = this.store.getLatestArtifact(run.id, "plan_draft");
+      const planVerdict = await this.runGate("plan", planOutput?.data ?? {}, run.id, issueNumber);
+
+      if (planVerdict.action === "proceed") {
+        // Auto-approve the plan
+        run = await this.approvePlan(issueNumber);
+        break;
+      }
+
+      if (planVerdict.action === "escalate" || attempt === maxGateReworks) {
+        this.store.updateStatus(run.id, "escalated",
+          planVerdict.action === "escalate"
+            ? planVerdict.reason
+            : `Plan gate rejected after ${attempt + 1} attempts`,
+        );
+        await safeGitHub(() => this.github.addComment(
+          this.repo, issueNumber,
+          `**Gate: plan rejected.** ${planVerdict.reason}`,
+        ), undefined);
+        return this.store.getWorkflowRun(run.id)!;
+      }
+
+      // Rework: transition to plan_revision and loop
+      await this.reworkPlanInternal(issueNumber, planVerdict.reason);
+    }
+
+    if (run.status !== "plan_accepted") return run;
+
+    // Phase 3: Implement + gate
+    run = await this.implement(issueNumber);
+    if (run.status === "failed") return run;
+
+    // Re-fetch run to get worktreePath set during implement
+    run = this.store.getWorkflowRun(run.id)!;
+    const implWorkDir = run.worktreePath ?? this.repoRoot;
+
+    // Stage and commit changes so the gate sees clean working tree
+    const implStatus = execFileSync("git", ["status", "--porcelain"], {
+      cwd: implWorkDir, encoding: "utf-8",
+    }).trim();
+    if (implStatus.length > 0) {
+      execFileSync("git", ["add", "-A"], { cwd: implWorkDir, encoding: "utf-8" });
+      execFileSync("git", ["commit", "-m", `feat(#${issueNumber}): implement changes`], {
+        cwd: implWorkDir, encoding: "utf-8",
+      });
+    }
+
+    const implOutput = this.store.getLatestArtifact(run.id, "implementation_report");
+    const implVerdict = await this.runGate("implement", implOutput?.data ?? {}, run.id, issueNumber, implWorkDir);
+    if (implVerdict.action !== "proceed") {
+      this.store.updateStatus(run.id, "escalated", implVerdict.reason);
+      await safeGitHub(() => this.github.addComment(
+        this.repo, issueNumber,
+        `**Gate: implementation rejected.** ${implVerdict.reason}`,
+      ), undefined);
+      return this.store.getWorkflowRun(run.id)!;
+    }
+
+    // Phase 4: Verify
+    run = await this.verify(issueNumber);
+    if (run.status === "failed") return run;
+
+    // Phase 5: Open PR
+    if (run.status === "awaiting_local_verify") {
+      run = await this.openPR(issueNumber);
+      if (run.status === "failed") return run;
+    }
+
+    // Phase 6: Wait for CI, fix failures if any
+    run = await this.waitForCIAndFix(issueNumber, run);
+    if (run.status === "failed" || run.status === "escalated") return run;
+
+    // Phase 7: Review + Repair loop
+    const maxRounds = this.config.repair.max_rounds;
+    for (let round = 0; round <= maxRounds; round++) {
+      run = await this.review(issueNumber);
+
+      if (run.status === "awaiting_human_review") {
+        // Watch mode: auto-ready the PR and mark done
+        await safeGitHub(() => this.github.markPRReady(this.repo, run.prNumber!), undefined);
+        this.store.updateStatus(run.id, "ready_to_merge", "Auto review passed, PR marked ready");
+        this.store.updateStatus(run.id, "done", "Workflow complete");
+        await safeGitHub(() => this.github.addComment(
+          this.repo, issueNumber,
+          "**DevAgent workflow complete.** PR is ready for merge.",
+        ), undefined);
+        return this.store.getWorkflowRun(run.id)!;
+      }
+
+      if (run.status === "auto_review_fix_loop") {
+        run = await this.repair(issueNumber);
+        if (run.status === "failed" || run.status === "escalated") {
+          return run;
+        }
+        // After repair, wait for CI again before next review
+        run = await this.waitForCIAndFix(issueNumber, run);
+        if (run.status === "failed" || run.status === "escalated") return run;
+      }
+    }
+
+    const finalRun = this.store.getWorkflowRunByIssue(this.repo, issueNumber);
+    return finalRun!;
+  }
+
+  /**
+   * Internal rework for watch mode — transitions plan without GitHub comment about human rework.
+   */
+  private async reworkPlanInternal(issueNumber: number, reason: string): Promise<void> {
+    const workflowRun = this.store.getWorkflowRunByIssue(this.repo, issueNumber);
+    if (!workflowRun) return;
+
+    const pending = this.store.getPendingApproval(workflowRun.id);
+    if (pending) {
+      this.store.resolveApprovalRequest(pending.id, "rework", reason);
+    }
+
+    this.store.updateStatus(workflowRun.id, "plan_revision", reason);
   }
 }

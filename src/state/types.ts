@@ -52,6 +52,7 @@ export type ArtifactType =
   | "verification_report"
   | "review_report"
   | "repair_report"
+  | "gate_verdict"
   | "diff_summary"
   | "stderr";
 

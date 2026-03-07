@@ -273,16 +273,17 @@ export class GhCliGateway implements GitHubGateway {
     prNumber: number,
   ): Promise<GitHubCheck[]> {
     const raw = gh(
-      [
-        "pr",
-        "checks",
-        String(prNumber),
-        "--json",
-        "name,status,conclusion",
-      ],
+      ["pr", "checks", String(prNumber), "--json", "name,state,bucket"],
       repo,
     );
-    return parseJSON<GhCheck[]>(raw).map(mapCheck);
+    interface GhCheckV2 { name: string; state: string; bucket: string }
+    return parseJSON<GhCheckV2[]>(raw).map((c) => ({
+      name: c.name,
+      status: c.state?.toLowerCase() === "pending" ? "in_progress" as const : "completed" as const,
+      conclusion: c.bucket?.toLowerCase() === "fail" ? "failure" as const
+        : c.bucket?.toLowerCase() === "pass" ? "success" as const
+        : null,
+    }));
   }
 
   async fetchPRReviewComments(
@@ -297,24 +298,192 @@ export class GhCliGateway implements GitHubGateway {
         ".",
       ],
     );
-    interface ApiComment {
+    interface ApiReviewComment {
       id: number;
+      node_id: string;
       user: { login: string };
       body: string;
       created_at: string;
     }
-    return parseJSON<ApiComment[]>(raw).map((c) => ({
+    return parseJSON<ApiReviewComment[]>(raw).map((c) => ({
       id: c.id,
+      nodeId: c.node_id,
       author: c.user.login,
       body: c.body,
       createdAt: c.created_at,
     }));
   }
 
-  async pushBranch(repoPath: string, branch: string): Promise<void> {
-    execFileSync("git", ["push", "origin", branch], {
+  async resolveReviewThreads(repo: string, prNumber: number, commentNodeIds: string[]): Promise<void> {
+    if (commentNodeIds.length === 0) return;
+
+    try {
+      // Fetch all review threads for the PR in a single query
+      const [owner, name] = repo.split("/");
+      const threadQuery = `
+        query($owner: String!, $name: String!, $prNumber: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $prNumber) {
+              reviewThreads(first: 100) {
+                nodes {
+                  id
+                  isResolved
+                  comments(first: 10) {
+                    nodes { id }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+      const threadRaw = execFileSync("gh", [
+        "api", "graphql",
+        "-f", `query=${threadQuery}`,
+        "-F", `owner=${owner}`,
+        "-F", `name=${name}`,
+        "-F", `prNumber=${prNumber}`,
+      ], { encoding: "utf-8" });
+      const threadData = JSON.parse(threadRaw);
+      const threads = threadData?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+
+      const nodeIdSet = new Set(commentNodeIds);
+
+      for (const thread of threads) {
+        if (thread.isResolved) continue;
+        const threadCommentIds = (thread.comments?.nodes ?? []).map((n: { id: string }) => n.id);
+        if (threadCommentIds.some((id: string) => nodeIdSet.has(id))) {
+          try {
+            const mutation = `
+              mutation($threadId: ID!) {
+                resolveReviewThread(input: { threadId: $threadId }) {
+                  thread { isResolved }
+                }
+              }
+            `;
+            execFileSync("gh", [
+              "api", "graphql",
+              "-f", `query=${mutation}`,
+              "-F", `threadId=${thread.id}`,
+            ], { encoding: "utf-8" });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            process.stderr.write(`[gh-cli] Failed to resolve thread ${thread.id}: ${msg}\n`);
+          }
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[gh-cli] Failed to fetch review threads: ${msg}\n`);
+    }
+  }
+
+  async checkBranchConflicts(repoPath: string, _branch: string, base: string): Promise<{ conflicted: boolean; conflictFiles: string[] }> {
+    try {
+      // Fetch latest remote state
+      execFileSync("git", ["fetch", "origin", base], { cwd: repoPath, encoding: "utf-8" });
+
+      // Use merge-tree to check for conflicts without modifying the working tree
+      const mergeBase = execFileSync("git", ["merge-base", "HEAD", `origin/${base}`], {
+        cwd: repoPath, encoding: "utf-8",
+      }).trim();
+
+      // git merge-tree outputs conflict info without touching the worktree
+      const mergeResult = execFileSync("git", ["merge-tree", mergeBase, "HEAD", `origin/${base}`], {
+        cwd: repoPath, encoding: "utf-8",
+      });
+
+      // Parse merge-tree output for conflicts
+      const conflictFiles: string[] = [];
+      for (const line of mergeResult.split("\n")) {
+        if (line.includes("changed in both")) {
+          const match = line.match(/changed in both\s+base\s+\d+\s+\S+\s+\S+\s+\S+\s+(\S+)/);
+          if (match) conflictFiles.push(match[1]);
+        }
+      }
+
+      const hasConflicts = conflictFiles.length > 0 || mergeResult.includes("<<<<<<");
+      return { conflicted: hasConflicts, conflictFiles };
+    } catch {
+      // If merge-base fails (no common ancestor), assume conflicted
+      return { conflicted: true, conflictFiles: [] };
+    }
+  }
+
+  async pushBranch(repoPath: string, branch: string, commitMessage?: string): Promise<void> {
+    // Commit any uncommitted changes before pushing
+    const status = execFileSync("git", ["status", "--porcelain"], {
       cwd: repoPath,
       encoding: "utf-8",
-    });
+    }).trim();
+
+    if (status.length > 0) {
+      execFileSync("git", ["add", "-A"], { cwd: repoPath, encoding: "utf-8" });
+      execFileSync("git", ["commit", "-m", commitMessage ?? "feat: apply devagent changes"], {
+        cwd: repoPath,
+        encoding: "utf-8",
+      });
+    }
+
+    try {
+      execFileSync("git", ["push", "origin", branch], {
+        cwd: repoPath,
+        encoding: "utf-8",
+      });
+    } catch (pushErr) {
+      const pushMsg = pushErr instanceof Error ? pushErr.message : String(pushErr);
+      process.stderr.write(`[gh-cli] Regular push failed, retrying with --force-with-lease: ${pushMsg}\n`);
+      execFileSync("git", ["push", "--force-with-lease", "origin", branch], {
+        cwd: repoPath,
+        encoding: "utf-8",
+      });
+    }
+  }
+
+  async markPRReady(repo: string, prNumber: number): Promise<void> {
+    gh(["pr", "ready", String(prNumber)], repo);
+  }
+
+  async fetchCIFailureLogs(repo: string, prNumber: number): Promise<{ check: string; log: string }[]> {
+    const checksRaw = gh(
+      ["pr", "checks", String(prNumber), "--json", "name,state,bucket,link"],
+      repo,
+    );
+    interface CheckInfo {
+      name: string;
+      state: string;
+      bucket: string;
+      link: string;
+    }
+    const checks = parseJSON<CheckInfo[]>(checksRaw);
+    const failed = checks.filter(
+      (c) => c.bucket?.toLowerCase() === "fail",
+    );
+
+    const results: { check: string; log: string }[] = [];
+    for (const check of failed) {
+      try {
+        // Extract run ID from link URL
+        const runMatch = check.link.match(/runs\/(\d+)/);
+        if (!runMatch) continue;
+        const runId = runMatch[1];
+
+        // Fetch failed log via gh run view
+        const log = execFileSync("gh", ["run", "view", runId, "--log-failed", "-R", repo], {
+          encoding: "utf-8",
+          maxBuffer: 1024 * 1024,
+        });
+        // Truncate to last 200 lines to keep it manageable for the LLM
+        const lines = log.split("\n");
+        const truncated = lines.length > 200
+          ? lines.slice(-200).join("\n")
+          : log;
+        results.push({ check: check.name, log: truncated });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        results.push({ check: check.name, log: `Failed to fetch log: ${msg}` });
+      }
+    }
+    return results;
   }
 }

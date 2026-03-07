@@ -10,6 +10,7 @@ import {
   reworkCommand,
   resumeCommand,
   resolveCommentsCommand,
+  fixCICommand,
   artifactsCommand,
 } from "./commands.js";
 
@@ -20,12 +21,13 @@ if (command === "help") {
 
 Commands:
   (default)             Launch interactive TUI dashboard
-  run <issue-number>    Run full workflow for a GitHub issue
+  run <issue-number>    Run full workflow for a GitHub issue [--mode assisted|watch]
   triage <issue-number> Run triage phase only
   approve <run-id>      Approve plan and proceed to implementation
   rework <run-id>       Send plan back for revision (--note "...")
   resume <run-id>       Resume a paused/failed run from current status
   resolve-comments <n>  Resolve PR review comments for issue #n
+  fix-ci <n>            Fix CI failures for issue #n [--ready]
   status <run-id>       Show workflow run details [--json]
   artifacts <run-id>    Show artifacts for a workflow run
   list                  List workflow runs [--json]
@@ -55,6 +57,9 @@ switch (command) {
     break;
   case "resolve-comments":
     await resolveCommentsCommand(args);
+    break;
+  case "fix-ci":
+    await fixCICommand(args);
     break;
   case "status":
     statusCommand(args);

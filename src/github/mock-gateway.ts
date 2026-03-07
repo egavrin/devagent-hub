@@ -131,7 +131,31 @@ export class MockGitHubGateway implements GitHubGateway {
     return pr.reviewComments;
   }
 
-  async pushBranch(repoPath: string, branch: string): Promise<void> {
+  resolvedThreads: string[] = [];
+  conflictResults = new Map<string, { conflicted: boolean; conflictFiles: string[] }>();
+
+  async resolveReviewThreads(_repo: string, _prNumber: number, commentNodeIds: string[]): Promise<void> {
+    this.resolvedThreads.push(...commentNodeIds);
+  }
+
+  async checkBranchConflicts(_repoPath: string, branch: string, _base: string): Promise<{ conflicted: boolean; conflictFiles: string[] }> {
+    return this.conflictResults.get(branch) ?? { conflicted: false, conflictFiles: [] };
+  }
+
+  readiedPRs: number[] = [];
+  ciFailureLogs: { check: string; log: string }[] = [];
+
+  async markPRReady(_repo: string, prNumber: number): Promise<void> {
+    this.readiedPRs.push(prNumber);
+    const pr = [...this.prs.values()].find((p) => p.number === prNumber);
+    if (pr) pr.draft = false;
+  }
+
+  async fetchCIFailureLogs(_repo: string, _prNumber: number): Promise<{ check: string; log: string }[]> {
+    return this.ciFailureLogs;
+  }
+
+  async pushBranch(repoPath: string, branch: string, _commitMessage?: string): Promise<void> {
     this.pushedBranches.push({ repoPath, branch });
   }
 }

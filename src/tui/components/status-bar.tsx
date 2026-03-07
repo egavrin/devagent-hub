@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { FocusPane } from "../hooks/use-keybindings.js";
+import type { FocusPane } from "../state.js";
 
 interface StatusBarProps {
   inputMode: boolean;
@@ -14,7 +14,7 @@ const INPUT_HINTS = "Type message, Enter to send, Esc to cancel";
 export function StatusBar({ inputMode, focusPane }: StatusBarProps) {
   let hints = KANBAN_HINTS;
   if (inputMode) hints = INPUT_HINTS;
-  else if (focusPane === "detail") hints = DETAIL_HINTS;
+  else if (focusPane !== "queue") hints = DETAIL_HINTS;
 
   return (
     <Box borderStyle="single" borderColor="gray" paddingLeft={1}>

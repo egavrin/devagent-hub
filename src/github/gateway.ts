@@ -27,5 +27,9 @@ export interface GitHubGateway {
     repo: string,
     prNumber: number,
   ): Promise<GitHubComment[]>;
-  pushBranch(repoPath: string, branch: string): Promise<void>;
+  pushBranch(repoPath: string, branch: string, commitMessage?: string): Promise<void>;
+  resolveReviewThreads(repo: string, prNumber: number, commentNodeIds: string[]): Promise<void>;
+  checkBranchConflicts(repoPath: string, branch: string, base: string): Promise<{ conflicted: boolean; conflictFiles: string[] }>;
+  markPRReady(repo: string, prNumber: number): Promise<void>;
+  fetchCIFailureLogs(repo: string, prNumber: number): Promise<{ check: string; log: string }[]>;
 }

@@ -8,7 +8,9 @@ import { WorktreeManager } from "../workspace/worktree-manager.js";
 import type { WorkflowStatus } from "../state/types.js";
 import { WorkflowOrchestrator } from "../workflow/orchestrator.js";
 import { loadWorkflowConfig } from "../workflow/config.js";
+import type { WorkflowConfig } from "../workflow/config.js";
 import { RunLauncher } from "../runner/launcher.js";
+import { LLMReviewGate } from "../workflow/review-gate.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "devagent-hub");
 const DB_PATH = join(CONFIG_DIR, "state.db");
@@ -41,10 +43,23 @@ function detectRepoRoot(): string {
   }).trim();
 }
 
+function createLauncher(config: WorkflowConfig): RunLauncher {
+  return new RunLauncher({
+    devagentBin: config.runner.bin ?? "devagent",
+    artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
+    timeout: 15 * 60 * 1000,
+    approvalMode: config.runner.approval_mode,
+    maxIterations: config.runner.max_iterations,
+    provider: config.runner.provider,
+    model: config.runner.model,
+    reasoning: config.runner.reasoning,
+  });
+}
+
 export async function runCommand(args: string[]): Promise<void> {
   const issueNumber = parseInt(args[0], 10);
   if (!issueNumber || isNaN(issueNumber)) {
-    console.error("Usage: devagent-hub run <issue-number> [--repo owner/repo] [--auto-approve]");
+    console.error("Usage: devagent-hub run <issue-number> [--repo owner/repo] [--auto-approve] [--mode assisted|watch]");
     process.exit(1);
   }
 
@@ -54,28 +69,34 @@ export async function runCommand(args: string[]): Promise<void> {
 
   try {
     const config = loadWorkflowConfig(repoRoot);
+
+    // CLI --mode overrides WORKFLOW.md mode
+    const modeIdx = args.indexOf("--mode");
+    if (modeIdx !== -1 && args[modeIdx + 1]) {
+      const mode = args[modeIdx + 1];
+      if (mode === "assisted" || mode === "watch") {
+        config.mode = mode;
+      } else {
+        console.error(`Invalid mode "${mode}". Valid: assisted, watch`);
+        process.exit(1);
+      }
+    }
+
+    const launcher = createLauncher(config);
     const worktreeManager = new WorktreeManager(repoRoot);
     const orchestrator = new WorkflowOrchestrator({
       store,
       github: new GhCliGateway(),
-      launcher: new RunLauncher({
-        devagentBin: config.runner.bin ?? "devagent",
-        artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
-        timeout: 10 * 60 * 1000,
-        approvalMode: config.runner.approval_mode,
-        maxIterations: config.runner.max_iterations,
-        provider: config.runner.provider,
-        model: config.runner.model,
-        reasoning: config.runner.reasoning,
-      }),
+      launcher,
       repo,
       repoRoot,
       config,
       worktreeManager,
+      reviewGate: config.mode === "watch" ? new LLMReviewGate(launcher) : undefined,
     });
 
     const autoApprove = args.includes("--auto-approve");
-    console.log(`Starting workflow for issue #${issueNumber}...`);
+    console.log(`Starting workflow for issue #${issueNumber} (mode: ${config.mode})...`);
     const run = await orchestrator.runWorkflow(issueNumber, { autoApprove });
 
     console.log(`\nWorkflow complete.`);
@@ -103,16 +124,7 @@ export async function triageCommand(args: string[]): Promise<void> {
     const orchestrator = new WorkflowOrchestrator({
       store,
       github: new GhCliGateway(),
-      launcher: new RunLauncher({
-        devagentBin: config.runner.bin ?? "devagent",
-        artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
-        timeout: 10 * 60 * 1000,
-        approvalMode: config.runner.approval_mode,
-        maxIterations: config.runner.max_iterations,
-        provider: config.runner.provider,
-        model: config.runner.model,
-        reasoning: config.runner.reasoning,
-      }),
+      launcher: createLauncher(config),
       repo,
       repoRoot,
       config,
@@ -234,7 +246,7 @@ export async function uiCommand(args: string[]): Promise<void> {
   const streamingLauncher = new StreamingLauncher({
     devagentBin: config.runner.bin ?? "devagent",
     artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
-    timeout: 10 * 60 * 1000,
+    timeout: 15 * 60 * 1000,
     approvalMode: config.runner.approval_mode,
     maxIterations: config.runner.max_iterations,
     provider: config.runner.provider,
@@ -281,16 +293,7 @@ export async function approveCommand(args: string[]): Promise<void> {
     const orchestrator = new WorkflowOrchestrator({
       store,
       github: new GhCliGateway(),
-      launcher: new RunLauncher({
-        devagentBin: config.runner.bin ?? "devagent",
-        artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
-        timeout: 10 * 60 * 1000,
-        approvalMode: config.runner.approval_mode,
-        maxIterations: config.runner.max_iterations,
-        provider: config.runner.provider,
-        model: config.runner.model,
-        reasoning: config.runner.reasoning,
-      }),
+      launcher: createLauncher(config),
       repo,
       repoRoot,
       config,
@@ -332,16 +335,7 @@ export async function reworkCommand(args: string[]): Promise<void> {
     const orchestrator = new WorkflowOrchestrator({
       store,
       github: new GhCliGateway(),
-      launcher: new RunLauncher({
-        devagentBin: config.runner.bin ?? "devagent",
-        artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
-        timeout: 10 * 60 * 1000,
-        approvalMode: config.runner.approval_mode,
-        maxIterations: config.runner.max_iterations,
-        provider: config.runner.provider,
-        model: config.runner.model,
-        reasoning: config.runner.reasoning,
-      }),
+      launcher: createLauncher(config),
       repo,
       repoRoot,
       config,
@@ -378,16 +372,7 @@ export async function resumeCommand(args: string[]): Promise<void> {
     const orchestrator = new WorkflowOrchestrator({
       store,
       github: new GhCliGateway(),
-      launcher: new RunLauncher({
-        devagentBin: config.runner.bin ?? "devagent",
-        artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
-        timeout: 10 * 60 * 1000,
-        approvalMode: config.runner.approval_mode,
-        maxIterations: config.runner.max_iterations,
-        provider: config.runner.provider,
-        model: config.runner.model,
-        reasoning: config.runner.reasoning,
-      }),
+      launcher: createLauncher(config),
       repo,
       repoRoot,
       config,
@@ -457,16 +442,7 @@ export async function resolveCommentsCommand(args: string[]): Promise<void> {
     const orchestrator = new WorkflowOrchestrator({
       store,
       github: new GhCliGateway(),
-      launcher: new RunLauncher({
-        devagentBin: config.runner.bin ?? "devagent",
-        artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
-        timeout: 10 * 60 * 1000,
-        approvalMode: config.runner.approval_mode,
-        maxIterations: config.runner.max_iterations,
-        provider: config.runner.provider,
-        model: config.runner.model,
-        reasoning: config.runner.reasoning,
-      }),
+      launcher: createLauncher(config),
       repo,
       repoRoot,
       config,
@@ -475,6 +451,43 @@ export async function resolveCommentsCommand(args: string[]): Promise<void> {
 
     console.log(`Resolving review comments for issue #${issueNumber}...`);
     const run = await orchestrator.resolveComments(issueNumber);
+
+    console.log(`\nDone.`);
+    console.log(`  Status: ${run.status}`);
+    console.log(`  Run ID: ${run.id}`);
+    if (run.prUrl) console.log(`  PR: ${run.prUrl}`);
+  } finally {
+    store.close();
+  }
+}
+
+export async function fixCICommand(args: string[]): Promise<void> {
+  const issueNumber = parseInt(args[0], 10);
+  if (!issueNumber || isNaN(issueNumber)) {
+    console.error("Usage: devagent-hub fix-ci <issue-number> [--repo owner/repo] [--ready]");
+    process.exit(1);
+  }
+
+  const repo = detectRepo(args);
+  const repoRoot = detectRepoRoot();
+  const markReady = args.includes("--ready");
+  const store = createStore();
+
+  try {
+    const config = loadWorkflowConfig(repoRoot);
+    const worktreeManager = new WorktreeManager(repoRoot);
+    const orchestrator = new WorkflowOrchestrator({
+      store,
+      github: new GhCliGateway(),
+      launcher: createLauncher(config),
+      repo,
+      repoRoot,
+      config,
+      worktreeManager,
+    });
+
+    console.log(`Fixing CI failures for issue #${issueNumber}...`);
+    const run = await orchestrator.fixCI(issueNumber, { markReady });
 
     console.log(`\nDone.`);
     console.log(`  Status: ${run.status}`);

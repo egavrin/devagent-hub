@@ -42,6 +42,15 @@ Some description here.
     expect(cfg.repair.max_rounds).toBe(7);
   });
 
+  it("parses mode field", () => {
+    const content = `---
+mode: watch
+---
+`;
+    const cfg = parseWorkflowConfig(content);
+    expect(cfg.mode).toBe("watch");
+  });
+
   it("returns defaults when no frontmatter present", () => {
     const content = "# Just a markdown file\n\nNo frontmatter here.";
     const cfg = parseWorkflowConfig(content);
@@ -170,5 +179,21 @@ describe("validateConfig", () => {
   it("accepts undefined reasoning", () => {
     const cfg = { ...defaultConfig(), runner: { ...defaultConfig().runner, reasoning: undefined } };
     expect(() => validateConfig(cfg)).not.toThrow();
+  });
+
+  it("accepts valid modes: assisted, watch", () => {
+    for (const mode of ["assisted", "watch"] as const) {
+      const cfg = { ...defaultConfig(), mode };
+      expect(() => validateConfig(cfg)).not.toThrow();
+    }
+  });
+
+  it("rejects invalid mode", () => {
+    const cfg = { ...defaultConfig(), mode: "autopilot" as any };
+    expect(() => validateConfig(cfg)).toThrow(WorkflowConfigError);
+  });
+
+  it("defaults mode to assisted", () => {
+    expect(defaultConfig().mode).toBe("assisted");
   });
 });
