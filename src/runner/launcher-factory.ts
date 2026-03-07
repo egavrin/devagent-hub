@@ -5,12 +5,16 @@ import { RunLauncher, describeRunner } from "./launcher.js";
 import { StreamingLauncher } from "./streaming-launcher.js";
 import { StreamingLauncherAdapter } from "./streaming-adapter.js";
 import { OpenCodeRunner } from "./opencode-runner.js";
+import { ClaudeRunner } from "./claude-runner.js";
+import { CodexRunner } from "./codex-runner.js";
 import type { ProcessRegistry } from "./process-registry.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
 /** Known runner types resolved from profile bin names. */
 const OPENCODE_BINS = new Set(["opencode"]);
+const CLAUDE_BINS = new Set(["claude"]);
+const CODEX_BINS = new Set(["codex", "npx @openai/codex"]);
 
 /**
  * Creates phase-configured launchers based on WorkflowConfig profiles and roles.
@@ -99,6 +103,12 @@ export class LauncherFactory {
       if (this.isOpenCodeBin(bin)) {
         const adapter = new OpenCodeRunner({ bin, model: this.resolveModel(profile) });
         results.set(bin, adapter.describe());
+      } else if (this.isClaudeBin(bin)) {
+        const adapter = new ClaudeRunner({ bin });
+        results.set(bin, adapter.describe());
+      } else if (this.isCodexBin(bin)) {
+        const adapter = new CodexRunner({ bin });
+        results.set(bin, adapter.describe());
       } else {
         results.set(bin, describeRunner(bin));
       }
@@ -126,6 +136,23 @@ export class LauncherFactory {
       });
     }
 
+    if (this.isClaudeBin(bin)) {
+      return new ClaudeRunner({
+        bin,
+        model: profile.model,
+        artifactsDir: this.artifactsDir,
+      });
+    }
+
+    if (this.isCodexBin(bin)) {
+      return new CodexRunner({
+        bin,
+        model: profile.model,
+        artifactsDir: this.artifactsDir,
+        env: this.resolveEnv(profile),
+      });
+    }
+
     // Default: DevAgent RunLauncher wrapped as RunnerAdapter
     const merged = this.mergeDevagentConfig(profile);
     return new DevAgentAdapter(new RunLauncher(merged));
@@ -135,8 +162,8 @@ export class LauncherFactory {
   private createStreamingAdapter(profile: AgentProfile): RunnerAdapter {
     const bin = profile.bin ?? this.config.runner.bin ?? "devagent";
 
-    if (this.isOpenCodeBin(bin)) {
-      // OpenCode doesn't support streaming — use sync adapter
+    if (this.isOpenCodeBin(bin) || this.isClaudeBin(bin) || this.isCodexBin(bin)) {
+      // External runners don't support streaming — use sync adapter
       return this.createAdapter(profile);
     }
 
@@ -150,6 +177,16 @@ export class LauncherFactory {
   private isOpenCodeBin(bin: string): boolean {
     const base = bin.split(/\s+/)[0].split("/").pop() ?? "";
     return OPENCODE_BINS.has(base);
+  }
+
+  private isClaudeBin(bin: string): boolean {
+    const base = bin.split(/\s+/)[0].split("/").pop() ?? "";
+    return CLAUDE_BINS.has(base);
+  }
+
+  private isCodexBin(bin: string): boolean {
+    // Handle both "codex" and "npx @openai/codex"
+    return CODEX_BINS.has(bin) || CODEX_BINS.has(bin.split(/\s+/)[0].split("/").pop() ?? "");
   }
 
   private resolveModel(profile: AgentProfile): string {

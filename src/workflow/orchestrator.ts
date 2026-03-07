@@ -258,14 +258,14 @@ export class WorkflowOrchestrator {
       phase: "plan",
       repoPath: this.repoRoot,
       runId: agentRun.id,
-      input: {
+      input: withSkills({
         issueNumber: issue.number,
         title: issue.title,
         body: issue.body,
         labels: [...issue.labels],
         author: issue.author,
         triageReport: triageArtifact?.data,
-      },
+      }, this.config, "plan"),
     });
 
     const agentStatus = result.exitCode === 0 ? "success" : "failed";
@@ -494,7 +494,7 @@ export class WorkflowOrchestrator {
       phase: "verify",
       repoPath: workDir,
       runId: agentRun.id,
-      input: { commands: this.config.verify.commands },
+      input: withSkills({ commands: this.config.verify.commands }, this.config, "verify"),
     });
 
     // 5. Complete agent run
@@ -617,11 +617,11 @@ export class WorkflowOrchestrator {
       phase: "review",
       repoPath: workDir,
       runId: agentRun.id,
-      input: {
+      input: withSkills({
         issueNumber,
         prNumber: wfRun.prNumber,
         branch: wfRun.branch,
-      },
+      }, this.config, "review"),
     });
 
     this.store.completeAgentRun(agentRun.id, {
@@ -706,12 +706,12 @@ export class WorkflowOrchestrator {
       phase: "repair",
       repoPath: workDir,
       runId: agentRun.id,
-      input: {
+      input: withSkills({
         round: currentRound,
         issueNumber,
         prNumber: wfRun.prNumber,
         findings,
-      },
+      }, this.config, "repair"),
     });
 
     this.store.completeAgentRun(agentRun.id, {
@@ -825,7 +825,7 @@ export class WorkflowOrchestrator {
       phase: "repair",
       repoPath: workDir,
       runId: agentRun.id,
-      input: { round: currentRound, issueNumber, prNumber: wfRun.prNumber, findings },
+      input: withSkills({ round: currentRound, issueNumber, prNumber: wfRun.prNumber, findings }, this.config, "repair"),
     });
 
     this.store.completeAgentRun(agentRun.id, {

@@ -5,7 +5,6 @@ import { homedir } from "node:os";
 import { StateStore } from "../state/store.js";
 import { GhCliGateway } from "../github/gh-cli-gateway.js";
 import { WorktreeManager } from "../workspace/worktree-manager.js";
-import type { WorkflowStatus } from "../state/types.js";
 import { WorkflowOrchestrator } from "../workflow/orchestrator.js";
 import { loadWorkflowConfig } from "../workflow/config.js";
 import type { WorkflowConfig } from "../workflow/config.js";
@@ -588,49 +587,49 @@ export function listCommand(args: string[] = []): void {
   const jsonMode = args.includes("--json");
   const store = createStore();
   try {
-    const statuses: WorkflowStatus[] = [
+    const runs = store.listAll();
+
+    if (jsonMode) {
+      console.log(JSON.stringify(runs, null, 2));
+      return;
+    }
+
+    if (runs.length === 0) {
+      console.log("No workflow runs found.");
+      return;
+    }
+
+    // Group by status
+    const byStatus = new Map<string, typeof runs>();
+    for (const run of runs) {
+      const group = byStatus.get(run.status) ?? [];
+      group.push(run);
+      byStatus.set(run.status, group);
+    }
+
+    // Summary line
+    const count = (s: string) => byStatus.get(s)?.length ?? 0;
+    const active = count("implementing") + count("auto_review_fix_loop");
+    const waiting = count("plan_draft") + count("plan_revision") + count("awaiting_human_review");
+    const done = count("done");
+    const failed = count("failed") + count("escalated");
+
+    console.log(`\n  ${runs.length} runs: ${active} active, ${waiting} waiting, ${done} done, ${failed} failed`);
+    console.log(`  ${"─".repeat(70)}`);
+
+    // Display order
+    const statusOrder: string[] = [
       "new", "triaged", "plan_draft", "plan_revision", "plan_accepted",
       "implementing", "awaiting_local_verify", "draft_pr_opened",
       "auto_review_fix_loop", "awaiting_human_review", "ready_to_merge",
       "done", "escalated", "failed",
     ];
 
-    const allRuns: Array<{ status: string; runs: ReturnType<typeof store.listByStatus> }> = [];
-    let totalCount = 0;
-    const statusCounts: Record<string, number> = {};
-
-    for (const status of statuses) {
-      const runs = store.listByStatus(status);
-      if (runs.length > 0) {
-        allRuns.push({ status, runs });
-        totalCount += runs.length;
-        statusCounts[status] = runs.length;
-      }
-    }
-
-    if (jsonMode) {
-      const flat = allRuns.flatMap((g) => g.runs);
-      console.log(JSON.stringify(flat, null, 2));
-      return;
-    }
-
-    if (totalCount === 0) {
-      console.log("No workflow runs found.");
-      return;
-    }
-
-    // Summary line
-    const active = (statusCounts["implementing"] ?? 0) + (statusCounts["auto_review_fix_loop"] ?? 0);
-    const waiting = (statusCounts["plan_draft"] ?? 0) + (statusCounts["plan_revision"] ?? 0) + (statusCounts["awaiting_human_review"] ?? 0);
-    const done = statusCounts["done"] ?? 0;
-    const failed = (statusCounts["failed"] ?? 0) + (statusCounts["escalated"] ?? 0);
-
-    console.log(`\n  ${totalCount} runs: ${active} active, ${waiting} waiting, ${done} done, ${failed} failed`);
-    console.log(`  ${"─".repeat(70)}`);
-
-    for (const { status, runs } of allRuns) {
-      console.log(`\n  [${status}] (${runs.length})`);
-      for (const run of runs) {
+    for (const status of statusOrder) {
+      const group = byStatus.get(status);
+      if (!group || group.length === 0) continue;
+      console.log(`\n  [${status}] (${group.length})`);
+      for (const run of group) {
         const title = (run.metadata as Record<string, unknown>)?.title ?? "";
         const age = formatCliDuration(run.createdAt, null);
         const titleStr = title ? `  ${String(title).slice(0, 35)}` : "";

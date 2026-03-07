@@ -374,20 +374,32 @@ export function App({ store, registry, orchestrator }: AppProps) {
       showStatus("Invalid number");
       return;
     }
+    const { sourceType, mode } = ui.newRunForm;
     dispatch({ type: "CLOSE_DIALOG" });
-    // TODO: support PR source type and watch mode in orchestrator
-    showStatus(`Triaging #${sourceId}...`);
-    orchestrator.triage(sourceId).then(
+
+    const label = mode === "watch" ? "Running (watch)" : "Triaging";
+    showStatus(`${label} ${sourceType} #${sourceId}...`);
+
+    const runFn = mode === "watch"
+      ? orchestrator.runWorkflow(sourceId)
+      : orchestrator.triage(sourceId);
+
+    runFn.then(
       (run) => {
+        // Store source type on the run
+        store.updateWorkflowRun(run.id, {
+          metadata: { ...(run.metadata as Record<string, unknown>), sourceType },
+        });
         dispatch({ type: "OPEN_RUN", runId: run.id });
-        showStatus(`#${sourceId}: ${run.status} -- press C to continue`);
+        const hint = mode === "watch" ? "" : " -- press C to continue";
+        showStatus(`#${sourceId}: ${run.status}${hint}`);
       },
       (err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         showStatus(`Failed: ${msg}`);
       },
     );
-  }, [ui.newRunForm, orchestrator, showStatus]);
+  }, [ui.newRunForm, orchestrator, store, showStatus]);
 
   const handleSendInput = useCallback((text: string) => {
     if (!activeProcessId) return;

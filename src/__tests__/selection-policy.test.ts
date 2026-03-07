@@ -81,4 +81,44 @@ describe("LauncherFactory — selection policy", () => {
     const adapter = factory.getLauncher("triage");
     expect(adapter.id).toBe("opencode");
   });
+
+  it("identifies claude bin correctly", () => {
+    const config = defaultConfig();
+    config.profiles = {
+      default: {},
+      claude_profile: { bin: "claude", model: "sonnet" },
+    };
+    config.roles = { triage: "claude_profile" };
+
+    const factory = new LauncherFactory(config);
+    const adapter = factory.getLauncher("triage");
+    expect(adapter.id).toBe("claude");
+  });
+
+  it("identifies codex bin correctly", () => {
+    const config = defaultConfig();
+    config.profiles = {
+      default: {},
+      codex_profile: { bin: "codex", model: "o3" },
+    };
+    config.roles = { triage: "codex_profile" };
+
+    const factory = new LauncherFactory(config);
+    const adapter = factory.getLauncher("triage");
+    expect(adapter.id).toBe("codex");
+  });
+
+  it("caches adapters by profile name", () => {
+    const config = defaultConfig();
+    config.profiles = {
+      default: {},
+      claude_profile: { bin: "claude" },
+    };
+    config.roles = { triage: "claude_profile", plan: "claude_profile" };
+
+    const factory = new LauncherFactory(config);
+    const a1 = factory.getLauncher("triage");
+    const a2 = factory.getLauncher("plan");
+    expect(a1).toBe(a2); // Same profile → same cached instance
+  });
 });
