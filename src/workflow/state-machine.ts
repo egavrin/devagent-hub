@@ -34,7 +34,10 @@ const TRANSITIONS: Record<WorkflowStatus, WorkflowStatus[]> = {
   ready_to_merge: ["done", "failed", "escalated"],
   done: [],
   escalated: [],
-  failed: ["new"], // allow retry
+  failed: [
+    "new", "triaged", "plan_accepted", "implementing",
+    "draft_pr_opened", "auto_review_fix_loop",
+  ], // allow retry from any phase
 };
 
 const PHASE_MAP: Record<WorkflowStatus, string | null> = {

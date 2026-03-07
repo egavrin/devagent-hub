@@ -80,7 +80,7 @@ export class WorkflowOrchestrator {
   }
 
   private get isWatchMode(): boolean {
-    return this.config.mode === "watch" && this.reviewGate !== undefined;
+    return (this.config.mode === "watch" || this.config.mode === "autopilot") && this.reviewGate !== undefined;
   }
 
   /** Request the workflow to pause after the current phase completes. */

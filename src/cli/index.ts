@@ -12,6 +12,7 @@ import {
   resolveCommentsCommand,
   fixCICommand,
   artifactsCommand,
+  autopilotCommand,
 } from "./commands.js";
 
 const [command, ...args] = process.argv.slice(2);

@@ -75,10 +75,10 @@ export async function runCommand(args: string[]): Promise<void> {
     const modeIdx = args.indexOf("--mode");
     if (modeIdx !== -1 && args[modeIdx + 1]) {
       const mode = args[modeIdx + 1];
-      if (mode === "assisted" || mode === "watch") {
+      if (mode === "assisted" || mode === "watch" || mode === "autopilot") {
         config.mode = mode;
       } else {
-        console.error(`Invalid mode "${mode}". Valid: assisted, watch`);
+        console.error(`Invalid mode "${mode}". Valid: assisted, watch, autopilot`);
         process.exit(1);
       }
     }
@@ -93,7 +93,7 @@ export async function runCommand(args: string[]): Promise<void> {
       repoRoot,
       config,
       worktreeManager,
-      reviewGate: config.mode === "watch" ? new LLMReviewGate(launcher) : undefined,
+      reviewGate: (config.mode === "watch" || config.mode === "autopilot") ? new LLMReviewGate(launcher) : undefined,
     });
 
     const autoApprove = args.includes("--auto-approve");
@@ -106,6 +106,82 @@ export async function runCommand(args: string[]): Promise<void> {
     if (run.prUrl) console.log(`  PR: ${run.prUrl}`);
   } finally {
     store.close();
+  }
+}
+
+export async function autopilotCommand(args: string[]): Promise<void> {
+  const repo = detectRepo(args);
+  const repoRoot = detectRepoRoot();
+  const store = createStore();
+
+  try {
+    const config = loadWorkflowConfig(repoRoot);
+    config.mode = "autopilot";
+
+    const launcher = createLauncher(config);
+    const worktreeManager = new WorktreeManager(repoRoot);
+    const github = new GhCliGateway();
+    const orchestrator = new WorkflowOrchestrator({
+      store,
+      github,
+      launcher,
+      repo,
+      repoRoot,
+      config,
+      worktreeManager,
+      reviewGate: new LLMReviewGate(launcher),
+    });
+
+    const { AutopilotDaemon } = await import("../workflow/autopilot.js");
+    const controller = new AbortController();
+
+    process.on("SIGINT", () => {
+      process.stderr.write("\n[autopilot] Shutting down gracefully...\n");
+      controller.abort();
+    });
+    process.on("SIGTERM", () => controller.abort());
+
+    const daemon = new AutopilotDaemon({
+      store,
+      github,
+      orchestrator,
+      config,
+      repo,
+      signal: controller.signal,
+      onEvent: (event) => {
+        switch (event.type) {
+          case "poll_start":
+            process.stderr.write(`[autopilot] Polling for eligible issues...\n`);
+            break;
+          case "poll_done":
+            process.stderr.write(`[autopilot] Found ${event.discovered} candidate(s), dispatched ${event.dispatched}\n`);
+            break;
+          case "dispatch":
+            console.log(`[autopilot] Dispatching #${event.issueNumber}: ${event.title}`);
+            break;
+          case "complete":
+            console.log(`[autopilot] #${event.issueNumber} → ${event.status}`);
+            break;
+          case "error":
+            console.error(`[autopilot] #${event.issueNumber} error: ${event.error}`);
+            break;
+          case "stopped":
+            console.log(`[autopilot] Stopped.`);
+            break;
+        }
+      },
+    });
+
+    const { poll_interval_seconds, max_concurrent_runs, eligible_labels } = config.autopilot;
+    console.log(`[autopilot] Starting daemon (repo: ${repo})`);
+    console.log(`[autopilot] Poll: every ${poll_interval_seconds}s, concurrency: ${max_concurrent_runs}, labels: ${eligible_labels.join(", ")}`);
+    console.log(`[autopilot] Press Ctrl+C to stop\n`);
+
+    await daemon.run();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Autopilot error: ${msg}`);
+    process.exit(1);
   }
 }
 
