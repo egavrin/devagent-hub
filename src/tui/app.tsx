@@ -10,6 +10,7 @@ import { useEventLog, type LogEntry } from "./hooks/use-event-log.js";
 import { useKeybindings } from "./hooks/use-keybindings.js";
 import { KanbanBoard, KANBAN_COLUMNS } from "./components/kanban-board.js";
 import { InputBar } from "./components/input-bar.js";
+import { RunDetail } from "./components/run-detail.js";
 
 interface AppProps {
   store: StateStore;
@@ -31,11 +32,20 @@ export function App({ store, registry, orchestrator }: AppProps) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [focusedColumnIndex, setFocusedColumnIndex] = useState(0);
   const [focusedRowIndex, setFocusedRowIndex] = useState(0);
+  const [showDetail, setShowDetail] = useState(false);
 
   const selectedRun = runs.find((r) => r.id === selectedRunId) ?? null;
 
   const agentRuns: AgentRun[] = selectedRun
     ? store.getAgentRunsByWorkflow(selectedRun.id)
+    : [];
+
+  const artifacts = selectedRun
+    ? store.getArtifactsByWorkflow(selectedRun.id)
+    : [];
+
+  const transitions = selectedRun
+    ? store.getTransitions(selectedRun.id)
     : [];
 
   // Track active process for kill functionality
@@ -109,16 +119,24 @@ export function App({ store, registry, orchestrator }: AppProps) {
   const handleSelect = useCallback(() => {
     const colRuns = getColumnRuns(focusedColumnIndex);
     if (colRuns[focusedRowIndex]) {
-      setSelectedRunId(colRuns[focusedRowIndex].id);
+      const runId = colRuns[focusedRowIndex].id;
+      if (selectedRunId === runId) {
+        setShowDetail((d) => !d);
+      } else {
+        setSelectedRunId(runId);
+        setShowDetail(true);
+      }
     }
-  }, [focusedColumnIndex, focusedRowIndex, getColumnRuns]);
+  }, [focusedColumnIndex, focusedRowIndex, getColumnRuns, selectedRunId]);
 
   const handleBack = useCallback(() => {
     if (newRunMode) {
       setNewRunMode(false);
       setNewRunInput("");
+    } else if (showDetail) {
+      setShowDetail(false);
     }
-  }, [newRunMode]);
+  }, [newRunMode, showDetail]);
 
   const handleApprove = useCallback(() => {
     if (!selectedRun) return;
@@ -305,7 +323,7 @@ export function App({ store, registry, orchestrator }: AppProps) {
   useKeybindings({
     onNavigate: handleNavigate,
     onSelect: handleSelect,
-    onSwitchPane: () => {},
+    onSwitchPane: () => { if (selectedRun) setShowDetail((d) => !d); },
     onSetLogMode: () => {},
     onApprove: handleApprove,
     onContinue: handleContinue,
@@ -330,39 +348,57 @@ export function App({ store, registry, orchestrator }: AppProps) {
 
   const hints = inputMode
     ? "Type message, Enter send, Esc cancel"
-    : "j/k↕ h/l↔  C continue  A approve  R retry  N new  D del  K kill  I input  Q quit";
+    : showDetail
+    ? "Esc back  C continue  A approve  R retry  K kill  Tab toggle  Q quit"
+    : "j/k↕ h/l↔  Enter detail  C continue  A approve  R retry  N new  D del  K kill  I input  Q quit";
+
+  const detailHeight = Math.max(10, termHeight - 6);
 
   return (
     <Box flexDirection="column" width={termWidth} height={termHeight}>
-      <KanbanBoard
-        runs={runs}
-        selectedRunId={selectedRunId}
-        activeRunId={activeAgentId}
-        focusedColumnIndex={focusedColumnIndex}
-        isFocused={true}
-      />
-      <Box paddingLeft={1} flexShrink={0}>
-        <Text bold color={activeAgentId ? "green" : "white"}>{taskInfo}</Text>
-      </Box>
-      <Box
-        borderStyle="single"
-        borderColor="gray"
-        flexDirection="column"
-        flexGrow={1}
-        paddingLeft={1}
-        overflow="hidden"
-      >
-        {visibleLogs.length === 0 ? (
-          <Text dimColor>No logs yet — select a task and press C to continue</Text>
-        ) : (
-          visibleLogs.map((entry, i) => (
-            <Text key={i} wrap="truncate">
-              <Text dimColor>{entry.timestamp.slice(11, 19)} </Text>
-              {entry.text}
-            </Text>
-          ))
-        )}
-      </Box>
+      {showDetail && selectedRun ? (
+        <Box borderStyle="single" borderColor="blue" flexDirection="column" flexGrow={1} overflow="hidden">
+          <RunDetail
+            run={selectedRun}
+            agentRuns={agentRuns}
+            artifacts={artifacts}
+            transitions={transitions}
+            height={detailHeight}
+          />
+        </Box>
+      ) : (
+        <>
+          <KanbanBoard
+            runs={runs}
+            selectedRunId={selectedRunId}
+            activeRunId={activeAgentId}
+            focusedColumnIndex={focusedColumnIndex}
+            isFocused={true}
+          />
+          <Box paddingLeft={1} flexShrink={0}>
+            <Text bold color={activeAgentId ? "green" : "white"}>{taskInfo}</Text>
+          </Box>
+          <Box
+            borderStyle="single"
+            borderColor="gray"
+            flexDirection="column"
+            flexGrow={1}
+            paddingLeft={1}
+            overflow="hidden"
+          >
+            {visibleLogs.length === 0 ? (
+              <Text dimColor>No logs yet — select a task and press C to continue</Text>
+            ) : (
+              visibleLogs.map((entry, i) => (
+                <Text key={i} wrap="truncate">
+                  <Text dimColor>{entry.timestamp.slice(11, 19)} </Text>
+                  {entry.text}
+                </Text>
+              ))
+            )}
+          </Box>
+        </>
+      )}
       {newRunMode && (
         <Box paddingLeft={1} flexShrink={0}>
           <Text color="green">Issue #: </Text>

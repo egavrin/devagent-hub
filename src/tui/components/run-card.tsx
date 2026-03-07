@@ -10,7 +10,8 @@ interface RunCardProps {
 
 export function RunCard({ run, isSelected, isActive }: RunCardProps) {
   const indicator = isActive ? ">" : " ";
-  const repoShort = run.repo.split("/").pop() ?? run.repo;
+  const title = (run.metadata as Record<string, unknown>)?.title as string | undefined;
+  const titleShort = title ? (title.length > 20 ? title.slice(0, 19) + "\u2026" : title) : "";
   const statusIcon = run.status === "done" ? "ok" :
     run.status === "failed" ? "!!" :
     run.status === "escalated" ? "^^" : "..";
@@ -22,7 +23,7 @@ export function RunCard({ run, isSelected, isActive }: RunCardProps) {
         inverse={isSelected}
         color={isSelected ? "blue" : undefined}
       >
-        {indicator}#{run.issueNumber} {repoShort}
+        {indicator}#{run.issueNumber} {titleShort}
       </Text>
       <Text dimColor>  {statusIcon} {run.status}</Text>
     </Box>
