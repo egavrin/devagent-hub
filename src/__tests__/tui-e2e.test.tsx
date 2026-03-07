@@ -63,6 +63,7 @@ describe("New run dialog flow", () => {
       sourceType: "issue",
       sourceId: "",
       mode: "assisted",
+      profile: "",
     });
   });
 
@@ -111,6 +112,7 @@ describe("New run dialog flow", () => {
       sourceType: "issue",
       sourceId: "",
       mode: "assisted",
+      profile: "",
     });
   });
 });

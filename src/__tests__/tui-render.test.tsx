@@ -246,7 +246,7 @@ describe("ContextFooter render", () => {
     const { lastFrame } = render(
       <ContextFooter screen="run" dialog={null} inputMode={false} runStatus="implementing" hasActiveProcess={true} />,
     );
-    expect(lastFrame()!).toContain("kill");
+    expect(lastFrame()!).toContain("K");
   });
 
   it("hides when dialog open", () => {
