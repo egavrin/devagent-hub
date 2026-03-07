@@ -64,6 +64,8 @@ describe("New run dialog flow", () => {
       sourceId: "",
       mode: "assisted",
       profile: "",
+      runner: "",
+      model: "",
     });
   });
 
@@ -113,6 +115,8 @@ describe("New run dialog flow", () => {
       sourceId: "",
       mode: "assisted",
       profile: "",
+      runner: "",
+      model: "",
     });
   });
 });
