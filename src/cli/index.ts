@@ -22,7 +22,8 @@ if (command === "help") {
 
 Commands:
   (default)             Launch interactive TUI dashboard
-  run <issue-number>    Run full workflow for a GitHub issue [--mode assisted|watch]
+  run <issue-number>    Run full workflow for a GitHub issue [--mode assisted|watch|autopilot]
+  autopilot             Start autopilot daemon (polls for issues, dispatches runs)
   triage <issue-number> Run triage phase only
   approve <run-id>      Approve plan and proceed to implementation
   rework <run-id>       Send plan back for revision (--note "...")
@@ -43,6 +44,9 @@ Options:
 switch (command) {
   case "run":
     await runCommand(args);
+    break;
+  case "autopilot":
+    await autopilotCommand(args);
     break;
   case "triage":
     await triageCommand(args);
