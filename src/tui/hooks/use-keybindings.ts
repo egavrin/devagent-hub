@@ -23,6 +23,7 @@ export interface KeybindingActions {
   onToggleDiff: () => void;
   onPause: () => void;
   onTakeOver: () => void;
+  onToggleAutopilot: () => void;
 }
 
 export function useKeybindings(
@@ -73,5 +74,6 @@ export function useKeybindings(
     if (input === "f" || input === "F") actions.onToggleDiff();
     if (input === "p" || input === "P") actions.onPause();
     if (input === "t" || input === "T") actions.onTakeOver();
+    if (input === "x" || input === "X") actions.onToggleAutopilot();
   });
 }

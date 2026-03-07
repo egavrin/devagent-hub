@@ -165,9 +165,7 @@ export class ClaudeRunner implements RunnerAdapter {
       "--permission-mode", this.config.permissionMode ?? "bypassPermissions",
     ];
 
-    if (this.config.model) {
-      args.push("--model", this.config.model);
-    }
+    args.push("--model", this.config.model ?? "sonnet");
 
     // Prompt goes last
     args.push(prompt);

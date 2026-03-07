@@ -1,8 +1,10 @@
-import React, { useReducer, useCallback, useEffect, useRef } from "react";
+import React, { useReducer, useCallback, useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useStdout } from "ink";
 import type { StateStore } from "../state/store.js";
 import type { ProcessRegistry } from "../runner/process-registry.js";
 import type { WorkflowOrchestrator } from "../workflow/orchestrator.js";
+import type { WorkflowConfig } from "../workflow/config.js";
+import type { GitHubGateway } from "../github/gateway.js";
 import type { AgentRun, ApprovalRequest } from "../state/types.js";
 import { useWorkflowRuns } from "./hooks/use-workflow-runs.js";
 import { useEventLog } from "./hooks/use-event-log.js";
@@ -20,15 +22,19 @@ import { ReworkDialog } from "./components/rework-dialog.js";
 import { ApprovalQueueView } from "./components/approval-queue-view.js";
 import type { ApprovalQueueItem } from "./components/approval-queue-view.js";
 import { WhyPausedPanel } from "./components/why-paused-panel.js";
+import { AutopilotBar } from "./components/autopilot-bar.js";
 import { uiReducer, initialUIState } from "./state.js";
 
 interface AppProps {
   store: StateStore;
   registry: ProcessRegistry;
   orchestrator: WorkflowOrchestrator;
+  config?: WorkflowConfig;
+  github?: GitHubGateway;
+  repo?: string;
 }
 
-export function App({ store, registry, orchestrator }: AppProps) {
+export function App({ store, registry, orchestrator, config, github, repo }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const termHeight = stdout?.rows ?? 40;
@@ -36,6 +42,11 @@ export function App({ store, registry, orchestrator }: AppProps) {
   const runs = useWorkflowRuns(store);
 
   const [ui, dispatch] = useReducer(uiReducer, initialUIState);
+
+  // Autopilot state
+  const [autopilotRunning, setAutopilotRunning] = useState(false);
+  const [autopilotStats, setAutopilotStats] = useState({ lastPoll: null as string | null, activeCount: 0, totalDispatched: 0 });
+  const autopilotAbort = useRef<AbortController | null>(null);
 
   const selectedRun = runs.find((r) => r.id === ui.selectedRunId) ?? null;
 
@@ -435,6 +446,54 @@ export function App({ store, registry, orchestrator }: AppProps) {
     }
   }, [selectedRun, showStatus]);
 
+  const handleToggleAutopilot = useCallback(async () => {
+    if (autopilotRunning) {
+      autopilotAbort.current?.abort();
+      setAutopilotRunning(false);
+      showStatus("Autopilot stopping...");
+      return;
+    }
+
+    if (!config || !github || !repo) {
+      showStatus("Autopilot requires config, github, and repo");
+      return;
+    }
+
+    const controller = new AbortController();
+    autopilotAbort.current = controller;
+    setAutopilotRunning(true);
+    showStatus("Autopilot started");
+
+    try {
+      const { AutopilotDaemon } = await import("../workflow/autopilot.js");
+      const daemon = new AutopilotDaemon({
+        store, github, orchestrator, config, repo,
+        signal: controller.signal,
+        onEvent: (event) => {
+          if (event.type === "poll_start") {
+            setAutopilotStats((s) => ({ ...s, lastPoll: new Date().toISOString() }));
+          } else if (event.type === "poll_done") {
+            setAutopilotStats((s) => ({
+              ...s,
+              activeCount: s.activeCount + event.dispatched,
+              totalDispatched: s.totalDispatched + event.dispatched,
+            }));
+          } else if (event.type === "complete" || event.type === "error") {
+            setAutopilotStats((s) => ({ ...s, activeCount: Math.max(0, s.activeCount - 1) }));
+          } else if (event.type === "stopped") {
+            setAutopilotRunning(false);
+            showStatus("Autopilot stopped");
+          }
+        },
+      });
+      await daemon.run();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showStatus(`Autopilot error: ${msg}`);
+      setAutopilotRunning(false);
+    }
+  }, [autopilotRunning, config, github, repo, store, orchestrator, showStatus]);
+
   // ─── Keybindings ─────────────────────────────────────────────
 
   const isDialogOpen = ui.dialog !== null;
@@ -461,6 +520,7 @@ export function App({ store, registry, orchestrator }: AppProps) {
     onToggleDiff: () => dispatch({ type: "TOGGLE_ARTIFACT_DIFF" }),
     onPause: isDialogOpen ? () => {} : handlePause,
     onTakeOver: isDialogOpen ? () => {} : handleTakeOver,
+    onToggleAutopilot: isDialogOpen ? () => {} : handleToggleAutopilot,
   }, ui.screen, ui.inputMode || isDialogOpen);
 
   // ─── Render ──────────────────────────────────────────────────
@@ -533,6 +593,12 @@ export function App({ store, registry, orchestrator }: AppProps) {
       ) : (
         /* ── Dashboard screen ─────────────────────────────── */
         <>
+          <AutopilotBar
+            running={autopilotRunning}
+            lastPoll={autopilotStats.lastPoll}
+            activeCount={autopilotStats.activeCount}
+            totalDispatched={autopilotStats.totalDispatched}
+          />
           <KanbanBoard
             runs={runs}
             selectedRunId={ui.selectedRunId}
@@ -625,6 +691,7 @@ export function App({ store, registry, orchestrator }: AppProps) {
         inputMode={ui.inputMode}
         runStatus={selectedRun?.status}
         hasActiveProcess={!!activeProcessId}
+        autopilotRunning={autopilotRunning}
       />
     </Box>
   );

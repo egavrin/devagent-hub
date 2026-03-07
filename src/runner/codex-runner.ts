@@ -168,9 +168,7 @@ export class CodexRunner implements RunnerAdapter {
       "-o", lastMsgPath,                 // last message written to file
     ];
 
-    if (this.config.model) {
-      args.push("-m", this.config.model);
-    }
+    args.push("-m", this.config.model ?? "gpt-5.3-codex");
 
     // Prompt goes last
     args.push(prompt);

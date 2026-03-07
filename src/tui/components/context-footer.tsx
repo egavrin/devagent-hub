@@ -8,6 +8,7 @@ interface ContextFooterProps {
   inputMode: boolean;
   runStatus?: string | null;
   hasActiveProcess: boolean;
+  autopilotRunning?: boolean;
 }
 
 interface HintEntry {
@@ -15,7 +16,7 @@ interface HintEntry {
   label: string;
 }
 
-function dashboardHints(): HintEntry[] {
+function dashboardHints(autopilotRunning?: boolean): HintEntry[] {
   return [
     { key: "j/k", label: "nav" },
     { key: "h/l", label: "col" },
@@ -23,6 +24,7 @@ function dashboardHints(): HintEntry[] {
     { key: "N", label: "new" },
     { key: "V", label: "approvals" },
     { key: "C", label: "continue" },
+    { key: "X", label: autopilotRunning ? "stop autopilot" : "autopilot" },
     { key: "Q", label: "quit" },
   ];
 }
@@ -77,7 +79,7 @@ function runHints(status: string | null, hasActiveProcess: boolean): HintEntry[]
   return hints;
 }
 
-export function ContextFooter({ screen, dialog, inputMode, runStatus, hasActiveProcess }: ContextFooterProps) {
+export function ContextFooter({ screen, dialog, inputMode, runStatus, hasActiveProcess, autopilotRunning }: ContextFooterProps) {
   if (inputMode || dialog) {
     return null;
   }
@@ -88,7 +90,7 @@ export function ContextFooter({ screen, dialog, inputMode, runStatus, hasActiveP
   } else if (screen === "run") {
     hints = runHints(runStatus ?? null, hasActiveProcess);
   } else {
-    hints = dashboardHints();
+    hints = dashboardHints(autopilotRunning);
   }
 
   return (

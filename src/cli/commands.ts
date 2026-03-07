@@ -317,10 +317,11 @@ export async function uiCommand(args: string[]): Promise<void> {
 
   const registry = new ProcessRegistry();
   const launcher = createLauncher(config, registry);
+  const github = new GhCliGateway();
   const worktreeManager = new WorktreeManager(repoRoot);
   const orchestrator = new WorkflowOrchestrator({
     store,
-    github: new GhCliGateway(),
+    github,
     launcher,
     repo,
     repoRoot,
@@ -328,7 +329,7 @@ export async function uiCommand(args: string[]): Promise<void> {
     worktreeManager,
   });
 
-  launchTUI({ store, registry, orchestrator });
+  launchTUI({ store, registry, orchestrator, config, github, repo });
 }
 
 export async function approveCommand(args: string[]): Promise<void> {
