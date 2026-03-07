@@ -25,6 +25,9 @@ export interface WorkflowRun {
   worktreePath: string | null;
   currentPhase: string | null;
   repairRound: number;
+  requestedModel: string | null;
+  actualProvider: string | null;
+  actualModel: string | null;
   createdAt: string;
   updatedAt: string;
   metadata: Record<string, unknown>;
@@ -46,6 +49,9 @@ export interface AgentRun {
   executorKind: "executor" | "reviewer" | "repairer" | null;
   profile: string | null;
   triggeredBy: "human" | "policy" | "autopilot" | null;
+  stderrPath: string | null;
+  stdoutPath: string | null;
+  exitReason: string | null;
 }
 
 export interface StatusTransition {
@@ -82,6 +88,8 @@ export interface Artifact {
   verdict: string | null;
   blockingCount: number | null;
   confidence: number | null;
+  warningCount: number | null;
+  riskLevel: string | null;
 }
 
 // ─── Approval Requests ──────────────────────────────────────
@@ -99,4 +107,6 @@ export interface ApprovalRequest {
   createdAt: string;
   severity: "low" | "medium" | "high" | "critical" | null;
   recommendedAction: string | null;
+  requestedBy: string | null;
+  reviewerRunId: string | null;
 }

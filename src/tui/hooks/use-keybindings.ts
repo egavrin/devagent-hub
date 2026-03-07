@@ -33,6 +33,9 @@ export interface KeybindingActions {
   onPaneShortcut: (index: number) => void;
   onGoTop: () => void;
   onGoBottom: () => void;
+  onEscalate: () => void;
+  onSettingsView: () => void;
+  onRerunWithProfile: () => void;
 }
 
 export function useKeybindings(
@@ -73,7 +76,8 @@ export function useKeybindings(
     // Run actions
     if (input === "a" || input === "A") actions.onApprove();
     if (input === "c" || input === "C") actions.onContinue();
-    if (input === "r" || input === "R") actions.onRetry();
+    if (input === "r") actions.onRetry();
+    if (input === "R") actions.onRerunWithProfile();
     if (input === "w" || input === "W") actions.onRework();
     if (input === "K") actions.onKill();
     if (input === "d" || input === "D") actions.onDelete();
@@ -88,6 +92,8 @@ export function useKeybindings(
     if (input === "x" || input === "X") actions.onToggleAutopilot();
     if (input === "m" || input === "M") actions.onRunnersView();
     if (input === "u" || input === "U") actions.onAutopilotView();
+    if (input === "e" || input === "E") actions.onEscalate();
+    if (input === ",") actions.onSettingsView();
 
     // Filter (/ key)
     if (input === "/") actions.onFilter();

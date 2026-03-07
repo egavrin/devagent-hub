@@ -47,6 +47,13 @@ function autopilotHints(): HintEntry[] {
   ];
 }
 
+function settingsHints(): HintEntry[] {
+  return [
+    { key: "Esc", label: "back" },
+    { key: "Q", label: "quit" },
+  ];
+}
+
 function approvalHints(): HintEntry[] {
   return [
     { key: "j/k", label: "nav" },
@@ -88,6 +95,8 @@ function runHints(status: string | null, hasActiveProcess: boolean): HintEntry[]
 
   const terminal = ["done", "failed", "escalated"];
   if (status && !terminal.includes(status)) {
+    hints.push({ key: "R", label: "rerun" });
+    hints.push({ key: "E", label: "escalate" });
     hints.push({ key: "P", label: "pause" });
     hints.push({ key: "T", label: "take-over" });
   }
@@ -111,6 +120,8 @@ export function ContextFooter({ screen, dialog, inputMode, runStatus, hasActiveP
     hints = runnersHints();
   } else if (screen === "autopilot") {
     hints = autopilotHints();
+  } else if (screen === "settings") {
+    hints = settingsHints();
   } else {
     hints = dashboardHints(autopilotRunning);
   }

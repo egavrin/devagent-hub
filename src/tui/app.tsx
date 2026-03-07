@@ -26,6 +26,8 @@ import { WhyPausedPanel } from "./components/why-paused-panel.js";
 import { AutopilotBar } from "./components/autopilot-bar.js";
 import { RunnersView } from "./components/runners-view.js";
 import { AutopilotView } from "./components/autopilot-view.js";
+import { RerunDialog } from "./components/rerun-dialog.js";
+import { SettingsView } from "./components/settings-view.js";
 import { CommandPalette } from "./components/command-palette.js";
 import type { PaletteCommand } from "./components/command-palette.js";
 import { HelpDialog } from "./components/help-dialog.js";
@@ -397,6 +399,96 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
     showStatus(`Deleted run for #${issueNum}`);
   }, [selectedRun, store, ui.screen, showStatus]);
 
+  const handleEscalate = useCallback(() => {
+    if (!selectedRun) return;
+    const terminal = ["done", "failed", "escalated"];
+    if (terminal.includes(selectedRun.status)) {
+      showStatus("Cannot escalate a terminal run");
+      return;
+    }
+    store.updateStatus(selectedRun.id, "escalated", "Escalated by user via TUI");
+    showStatus(`Escalated #${selectedRun.issueNumber}`);
+  }, [selectedRun, store, showStatus]);
+
+  const handleRerunWithProfile = useCallback(() => {
+    if (!selectedRun) return;
+    if (!config || Object.keys(config.profiles).length === 0) {
+      showStatus("No profiles configured");
+      return;
+    }
+    dispatch({ type: "OPEN_DIALOG", dialog: "rerun" });
+  }, [selectedRun, config, showStatus]);
+
+  const handleRerunSubmit = useCallback((profileName: string) => {
+    if (!selectedRun) return;
+    dispatch({ type: "CLOSE_DIALOG" });
+
+    // Kill current process if any
+    if (activeProcessId) {
+      const mp = registry.get(activeProcessId);
+      if (mp) mp.kill();
+    }
+
+    // Update run's agent profile
+    store.updateWorkflowRun(selectedRun.id, { agentProfile: profileName });
+
+    // Retry the current phase
+    const issue = selectedRun.issueNumber;
+    const phase = selectedRun.currentPhase ?? "triage";
+
+    const phaseRetry: Record<string, { label: string; fn: () => Promise<unknown> }> = {
+      triage: {
+        label: "Rerunning triage",
+        fn: () => {
+          store.deleteWorkflowRun(selectedRun.id);
+          return orchestrator.triage(issue);
+        },
+      },
+      plan: {
+        label: "Rerunning plan",
+        fn: () => {
+          store.updateStatus(selectedRun.id, "triaged", "Rerun with profile");
+          return orchestrator.plan(issue);
+        },
+      },
+      implement: {
+        label: "Rerunning implement",
+        fn: () => {
+          store.updateStatus(selectedRun.id, "plan_accepted", "Rerun with profile");
+          return orchestrator.implementAndPR(issue);
+        },
+      },
+      verify: {
+        label: "Rerunning verify",
+        fn: () => {
+          store.updateStatus(selectedRun.id, "implementing", "Rerun with profile");
+          return orchestrator.verify(issue);
+        },
+      },
+      review: {
+        label: "Rerunning review",
+        fn: () => {
+          store.updateStatus(selectedRun.id, "draft_pr_opened", "Rerun with profile");
+          return orchestrator.review(issue);
+        },
+      },
+      repair: {
+        label: "Rerunning repair",
+        fn: () => {
+          store.updateStatus(selectedRun.id, "auto_review_fix_loop", "Rerun with profile");
+          return orchestrator.repair(issue);
+        },
+      },
+    };
+
+    const retry = phaseRetry[phase] ?? phaseRetry["triage"];
+    showStatus(`${retry.label} #${issue} with profile "${profileName}"...`, true);
+    retry.fn().then(
+      () => showStatus(`${retry.label} complete for #${issue}`),
+      (err: unknown) => showStatus(`Rerun failed: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }, [selectedRun, activeProcessId, registry, store, orchestrator, showStatus]);
+
   const handleNewRun = useCallback(() => {
     dispatch({ type: "OPEN_DIALOG", dialog: "new-run" });
   }, []);
@@ -550,6 +642,9 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
     onFilter: isDialogOpen ? () => {} : () => dispatch({ type: "TOGGLE_FILTER" }),
     onCommandPalette: isDialogOpen ? () => {} : () => dispatch({ type: "OPEN_DIALOG", dialog: "command-palette" }),
     onHelp: isDialogOpen ? () => {} : () => dispatch({ type: "OPEN_DIALOG", dialog: "help" }),
+    onEscalate: isDialogOpen ? () => {} : handleEscalate,
+    onSettingsView: isDialogOpen ? () => {} : () => dispatch({ type: "SET_SCREEN", screen: "settings" }),
+    onRerunWithProfile: isDialogOpen ? () => {} : handleRerunWithProfile,
     onPaneShortcut: (index: number) => {
       const paneMap: [FocusPane, LogMode | null][] = [
         ["queue", null],
@@ -670,6 +765,9 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
           stats={autopilotStats}
           height={termHeight - 4}
         />
+      ) : ui.screen === "settings" && config ? (
+        /* ── Settings screen ─────────────────────────────── */
+        <SettingsView config={config} height={termHeight - 4} />
       ) : (
         /* ── Dashboard screen ─────────────────────────────── */
         <>
@@ -786,6 +884,17 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
       {ui.dialog === "help" && (
         <Box position="absolute" marginTop={2} marginLeft={Math.floor((termWidth - 62) / 2)}>
           <HelpDialog onClose={() => dispatch({ type: "CLOSE_DIALOG" })} />
+        </Box>
+      )}
+
+      {ui.dialog === "rerun" && config && (
+        <Box position="absolute" marginTop={5} marginLeft={Math.floor((termWidth - 52) / 2)}>
+          <RerunDialog
+            profiles={Object.keys(config.profiles)}
+            selectedIndex={ui.rerunProfileIndex}
+            onSelect={handleRerunSubmit}
+            onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
+          />
         </Box>
       )}
 

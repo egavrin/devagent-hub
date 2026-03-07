@@ -56,7 +56,14 @@ export function RunCard({ run, isSelected, isActive }: RunCardProps) {
         {run.repairRound > 0 ? ` r${run.repairRound}` : ""}
         {" "}
         {age}
+        {run.agentProfile ? ` ${run.agentProfile}` : ""}
       </Text>
+      {run.blockedReason && (
+        <Text dimColor color="red">
+          {"  "}
+          {run.blockedReason.length > 40 ? run.blockedReason.slice(0, 39) + "\u2026" : run.blockedReason}
+        </Text>
+      )}
     </Box>
   );
 }

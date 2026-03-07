@@ -9,11 +9,13 @@ interface AutopilotViewProps {
   autopilotRunning: boolean;
   stats: { lastPoll: string | null; activeCount: number; totalDispatched: number };
   height: number;
+  eligibleIssues?: Array<{ number: number; title: string; labels: string[] }>;
+  skippedIssues?: Array<{ number: number; title: string; reason: string }>;
 }
 
 const TERMINAL_STATUSES = new Set(["done", "failed", "escalated"]);
 
-export function AutopilotView({ config, runs, autopilotRunning, stats, height }: AutopilotViewProps) {
+export function AutopilotView({ config, runs, autopilotRunning, stats, height, eligibleIssues, skippedIssues }: AutopilotViewProps) {
   const ap = config?.autopilot;
 
   const activeRuns = runs.filter((r) => !TERMINAL_STATUSES.has(r.status));
@@ -86,6 +88,52 @@ export function AutopilotView({ config, runs, autopilotRunning, stats, height }:
             <Text dimColor>  max_changed_files:</Text>
             <Text> {ap.max_changed_files}</Text>
           </Box>
+        </Box>
+      )}
+
+      {/* Eligible Issues */}
+      <Box
+        flexDirection="column"
+        borderStyle="single"
+        borderColor="gray"
+        marginTop={1}
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        <Text bold>Eligible Issues ({eligibleIssues?.length ?? 0})</Text>
+        {!eligibleIssues || eligibleIssues.length === 0 ? (
+          <Text dimColor>No eligible issues data — run autopilot to populate</Text>
+        ) : (
+          eligibleIssues.map((issue) => (
+            <Box key={issue.number} flexDirection="row">
+              <Text color="yellow">#{issue.number}</Text>
+              <Text> {issue.title}</Text>
+              {issue.labels.length > 0 && (
+                <Text dimColor>  [{issue.labels.join(", ")}]</Text>
+              )}
+            </Box>
+          ))
+        )}
+      </Box>
+
+      {/* Skipped Issues */}
+      {skippedIssues && skippedIssues.length > 0 && (
+        <Box
+          flexDirection="column"
+          borderStyle="single"
+          borderColor="gray"
+          marginTop={1}
+          paddingLeft={1}
+          paddingRight={1}
+        >
+          <Text bold>Skipped Issues ({skippedIssues.length})</Text>
+          {skippedIssues.map((issue) => (
+            <Box key={issue.number} flexDirection="row">
+              <Text color="yellow">#{issue.number}</Text>
+              <Text> {issue.title}</Text>
+              <Text dimColor> — {issue.reason}</Text>
+            </Box>
+          ))}
         </Box>
       )}
 
@@ -171,6 +219,26 @@ export function AutopilotView({ config, runs, autopilotRunning, stats, height }:
           })}
         </Box>
       )}
+
+      {/* Controls */}
+      <Box
+        flexDirection="column"
+        borderStyle="single"
+        borderColor="gray"
+        marginTop={1}
+        paddingLeft={1}
+        paddingRight={1}
+      >
+        <Text bold>Controls</Text>
+        <Box flexDirection="row">
+          <Text bold color="cyan">  X</Text>
+          <Text>  toggle autopilot on/off</Text>
+        </Box>
+        <Box flexDirection="row">
+          <Text bold color="cyan">  Esc</Text>
+          <Text>  back to dashboard</Text>
+        </Box>
+      </Box>
     </Box>
   );
 }

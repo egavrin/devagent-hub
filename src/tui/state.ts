@@ -1,10 +1,10 @@
-export type Screen = "dashboard" | "run" | "approvals" | "runners" | "autopilot";
+export type Screen = "dashboard" | "run" | "approvals" | "runners" | "autopilot" | "settings";
 
 export type FocusPane = "queue" | "artifact" | "timeline" | "logs";
 
 export type LogMode = "structured" | "raw";
 
-export type Dialog = null | "new-run" | "rework" | "command-palette" | "help";
+export type Dialog = null | "new-run" | "rework" | "command-palette" | "help" | "rerun";
 
 export type NewRunSourceType = "issue" | "pr";
 export type NewRunMode = "assisted" | "watch";
@@ -31,6 +31,7 @@ export interface UIState {
   showArtifactDiff: boolean;
   filterQuery: string;
   filterActive: boolean;
+  rerunProfileIndex: number;
 }
 
 export type UIAction =
@@ -55,6 +56,7 @@ export type UIAction =
   | { type: "TOGGLE_ARTIFACT_DIFF" }
   | { type: "SET_FILTER"; query: string }
   | { type: "TOGGLE_FILTER" }
+  | { type: "SET_RERUN_INDEX"; index: number }
   | { type: "BACK" };
 
 const PANE_ORDER: FocusPane[] = ["queue", "artifact", "timeline", "logs"];
@@ -75,6 +77,7 @@ export const initialUIState: UIState = {
   showArtifactDiff: false,
   filterQuery: "",
   filterActive: false,
+  rerunProfileIndex: 0,
 };
 
 export function uiReducer(state: UIState, action: UIAction): UIState {
@@ -114,6 +117,7 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
           ? { newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted" } }
           : {}),
         ...(action.dialog === "rework" ? { reworkNote: "" } : {}),
+        ...(action.dialog === "rerun" ? { rerunProfileIndex: 0 } : {}),
       };
 
     case "CLOSE_DIALOG":
@@ -149,6 +153,9 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
     case "SET_FILTER":
       return { ...state, filterQuery: action.query };
 
+    case "SET_RERUN_INDEX":
+      return { ...state, rerunProfileIndex: action.index };
+
     case "TOGGLE_FILTER":
       return state.filterActive
         ? { ...state, filterActive: false, filterQuery: "" }
@@ -178,6 +185,9 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
         return { ...state, screen: "dashboard", focusedPane: "queue" };
       }
       if (state.screen === "autopilot") {
+        return { ...state, screen: "dashboard", focusedPane: "queue" };
+      }
+      if (state.screen === "settings") {
         return { ...state, screen: "dashboard", focusedPane: "queue" };
       }
       return state;

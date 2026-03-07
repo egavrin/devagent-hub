@@ -5,7 +5,6 @@ import type { WorkflowRun, Artifact } from "../../state/types.js";
 interface RunHeaderProps {
   run: WorkflowRun;
   isActive: boolean;
-  mode?: "assisted" | "watch";
   gateVerdicts?: Artifact[];
 }
 
@@ -73,7 +72,7 @@ function GateChain({ gateVerdicts }: { gateVerdicts: Artifact[] }) {
   );
 }
 
-export function RunHeader({ run, isActive, mode, gateVerdicts }: RunHeaderProps) {
+export function RunHeader({ run, isActive, gateVerdicts }: RunHeaderProps) {
   const title = (run.metadata as Record<string, unknown>)?.title as string | undefined;
   const statusColor = STATUS_COLORS[run.status] ?? "white";
   const repoShort = run.repo.split("/").pop() ?? run.repo;
@@ -87,11 +86,9 @@ export function RunHeader({ run, isActive, mode, gateVerdicts }: RunHeaderProps)
           {title ? ` ${title}` : ""}
         </Text>
         <Box gap={2}>
-          {mode && (
-            <Text color={mode === "watch" ? "magenta" : "gray"} bold>
-              {mode === "watch" ? "[WATCH]" : "[ASSISTED]"}
-            </Text>
-          )}
+          <Text color={run.mode === "watch" ? "magenta" : run.mode === "autopilot" ? "red" : "gray"} bold>
+            {run.mode === "watch" ? "[WATCH]" : run.mode === "autopilot" ? "[AUTOPILOT]" : "[ASSISTED]"}
+          </Text>
           <Text dimColor>{repoShort}</Text>
         </Box>
       </Box>
@@ -109,6 +106,13 @@ export function RunHeader({ run, isActive, mode, gateVerdicts }: RunHeaderProps)
         )}
         <Text dimColor>Age: {formatAge(run.createdAt)}</Text>
       </Box>
+
+      {(run.runnerId || run.agentProfile) && (
+        <Box gap={2}>
+          {run.runnerId && <Text dimColor>Runner: {run.runnerId}</Text>}
+          {run.agentProfile && <Text dimColor>Profile: {run.agentProfile}</Text>}
+        </Box>
+      )}
 
       <Box gap={2}>
         {run.branch && <Text dimColor>Branch: {run.branch}</Text>}

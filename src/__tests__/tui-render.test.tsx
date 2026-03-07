@@ -34,6 +34,9 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     agentProfile: null,
     blockedReason: null,
     nextAction: null,
+    requestedModel: null,
+    actualProvider: null,
+    actualModel: null,
     ...overrides,
   };
 }
@@ -52,6 +55,8 @@ function makeArtifact(overrides: Partial<Artifact> = {}): Artifact {
     verdict: null,
     blockingCount: null,
     confidence: null,
+    warningCount: null,
+    riskLevel: null,
     ...overrides,
   };
 }
@@ -73,6 +78,9 @@ function makeAgentRun(overrides: Partial<AgentRun> = {}): AgentRun {
     executorKind: null,
     profile: null,
     triggeredBy: null,
+    stderrPath: null,
+    stdoutPath: null,
+    exitReason: null,
     ...overrides,
   };
 }
@@ -120,6 +128,27 @@ describe("RunHeader render", () => {
     expect(lastFrame()!).toContain("2");
   });
 
+  it("shows mode from run", () => {
+    const { lastFrame } = render(
+      <RunHeader run={makeRun({ mode: "watch" })} isActive={false} />,
+    );
+    expect(lastFrame()!).toContain("[WATCH]");
+  });
+
+  it("shows profile when set", () => {
+    const { lastFrame } = render(
+      <RunHeader run={makeRun({ agentProfile: "fast" })} isActive={false} />,
+    );
+    expect(lastFrame()!).toContain("Profile: fast");
+  });
+
+  it("shows runner when set", () => {
+    const { lastFrame } = render(
+      <RunHeader run={makeRun({ runnerId: "runner-alpha" })} isActive={false} />,
+    );
+    expect(lastFrame()!).toContain("Runner: runner-alpha");
+  });
+
   it("renders gate verdicts", () => {
     const verdicts: Artifact[] = [
       makeArtifact({ id: "gate-1", type: "gate_verdict", phase: "triage", data: { action: "proceed", reason: "ok" } }),
@@ -149,6 +178,20 @@ describe("RunCard render", () => {
       <RunCard run={makeRun()} isSelected={true} isActive={false} />,
     );
     expect(lastFrame()!).toContain("#42");
+  });
+
+  it("shows blocked reason when set", () => {
+    const { lastFrame } = render(
+      <RunCard run={makeRun({ blockedReason: "Rate limit exceeded" })} isSelected={false} isActive={false} />,
+    );
+    expect(lastFrame()!).toContain("Rate limit exceeded");
+  });
+
+  it("shows agent profile tag", () => {
+    const { lastFrame } = render(
+      <RunCard run={makeRun({ agentProfile: "fast" })} isSelected={false} isActive={false} />,
+    );
+    expect(lastFrame()!).toContain("fast");
   });
 
   it("renders different statuses", () => {
@@ -290,6 +333,8 @@ describe("ArtifactPane render", () => {
       createdAt: new Date().toISOString(),
       severity: null,
       recommendedAction: null,
+      requestedBy: null,
+      reviewerRunId: null,
     }];
     const { lastFrame } = render(
       <ArtifactPane artifacts={artifacts} approvals={approvals} isFocused={false} height={20} showDiff={false} />,

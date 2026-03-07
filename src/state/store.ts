@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   worktree_path TEXT,
   current_phase TEXT,
   repair_round INTEGER NOT NULL DEFAULT 0,
+  requested_model TEXT,
+  actual_provider TEXT,
+  actual_model TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   metadata TEXT NOT NULL DEFAULT '{}'
@@ -53,6 +56,9 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   executor_kind TEXT,
   profile TEXT,
   triggered_by TEXT,
+  stderr_path TEXT,
+  stdout_path TEXT,
+  exit_reason TEXT,
   FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
 );
 
@@ -79,6 +85,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
   verdict TEXT,
   blocking_count INTEGER,
   confidence REAL,
+  warning_count INTEGER,
+  risk_level TEXT,
   FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id),
   FOREIGN KEY (agent_run_id) REFERENCES agent_runs(id)
 );
@@ -94,6 +102,8 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   created_at TEXT NOT NULL,
   severity TEXT,
   recommended_action TEXT,
+  requested_by TEXT,
+  reviewer_run_id TEXT,
   FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
 );
 `;
@@ -116,6 +126,9 @@ interface WorkflowRunRow {
   worktree_path: string | null;
   current_phase: string | null;
   repair_round: number;
+  requested_model: string | null;
+  actual_provider: string | null;
+  actual_model: string | null;
   created_at: string;
   updated_at: string;
   metadata: string;
@@ -137,6 +150,9 @@ interface AgentRunRow {
   executor_kind: string | null;
   profile: string | null;
   triggered_by: string | null;
+  stderr_path: string | null;
+  stdout_path: string | null;
+  exit_reason: string | null;
 }
 
 interface TransitionRow {
@@ -159,6 +175,8 @@ interface ArtifactRow {
   verdict: string | null;
   blocking_count: number | null;
   confidence: number | null;
+  warning_count: number | null;
+  risk_level: string | null;
 }
 
 interface ApprovalRequestRow {
@@ -172,6 +190,8 @@ interface ApprovalRequestRow {
   created_at: string;
   severity: string | null;
   recommended_action: string | null;
+  requested_by: string | null;
+  reviewer_run_id: string | null;
 }
 
 function rowToArtifact(row: ArtifactRow): Artifact {
@@ -188,6 +208,8 @@ function rowToArtifact(row: ArtifactRow): Artifact {
     verdict: row.verdict ?? null,
     blockingCount: row.blocking_count ?? null,
     confidence: row.confidence ?? null,
+    warningCount: row.warning_count ?? null,
+    riskLevel: row.risk_level ?? null,
   };
 }
 
@@ -203,6 +225,8 @@ function rowToApprovalRequest(row: ApprovalRequestRow): ApprovalRequest {
     createdAt: row.created_at,
     severity: (row.severity as ApprovalRequest["severity"]) ?? null,
     recommendedAction: row.recommended_action ?? null,
+    requestedBy: row.requested_by ?? null,
+    reviewerRunId: row.reviewer_run_id ?? null,
   };
 }
 
@@ -225,6 +249,9 @@ function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
     worktreePath: row.worktree_path,
     currentPhase: row.current_phase,
     repairRound: row.repair_round,
+    requestedModel: row.requested_model ?? null,
+    actualProvider: row.actual_provider ?? null,
+    actualModel: row.actual_model ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     metadata: JSON.parse(row.metadata),
@@ -248,6 +275,9 @@ function rowToAgentRun(row: AgentRunRow): AgentRun {
     executorKind: (row.executor_kind as AgentRun["executorKind"]) ?? null,
     profile: row.profile ?? null,
     triggeredBy: (row.triggered_by as AgentRun["triggeredBy"]) ?? null,
+    stderrPath: row.stderr_path ?? null,
+    stdoutPath: row.stdout_path ?? null,
+    exitReason: row.exit_reason ?? null,
   };
 }
 
@@ -284,6 +314,15 @@ export class StateStore {
     if (!colNames.has("next_action")) {
       this.db.exec("ALTER TABLE workflow_runs ADD COLUMN next_action TEXT");
     }
+    if (!colNames.has("requested_model")) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN requested_model TEXT");
+    }
+    if (!colNames.has("actual_provider")) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN actual_provider TEXT");
+    }
+    if (!colNames.has("actual_model")) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN actual_model TEXT");
+    }
 
     // Add new columns to agent_runs if missing
     const arCols = this.db.prepare("PRAGMA table_info(agent_runs)").all() as Array<{ name: string }>;
@@ -300,6 +339,15 @@ export class StateStore {
     if (!arColNames.has("triggered_by")) {
       this.db.exec("ALTER TABLE agent_runs ADD COLUMN triggered_by TEXT");
     }
+    if (!arColNames.has("stderr_path")) {
+      this.db.exec("ALTER TABLE agent_runs ADD COLUMN stderr_path TEXT");
+    }
+    if (!arColNames.has("stdout_path")) {
+      this.db.exec("ALTER TABLE agent_runs ADD COLUMN stdout_path TEXT");
+    }
+    if (!arColNames.has("exit_reason")) {
+      this.db.exec("ALTER TABLE agent_runs ADD COLUMN exit_reason TEXT");
+    }
 
     // Add new columns to artifacts if missing
     const artCols = this.db.prepare("PRAGMA table_info(artifacts)").all() as Array<{ name: string }>;
@@ -313,6 +361,12 @@ export class StateStore {
     if (!artColNames.has("confidence")) {
       this.db.exec("ALTER TABLE artifacts ADD COLUMN confidence REAL");
     }
+    if (!artColNames.has("warning_count")) {
+      this.db.exec("ALTER TABLE artifacts ADD COLUMN warning_count INTEGER");
+    }
+    if (!artColNames.has("risk_level")) {
+      this.db.exec("ALTER TABLE artifacts ADD COLUMN risk_level TEXT");
+    }
 
     // Add new columns to approval_requests if missing
     const apCols = this.db.prepare("PRAGMA table_info(approval_requests)").all() as Array<{ name: string }>;
@@ -322,6 +376,12 @@ export class StateStore {
     }
     if (!apColNames.has("recommended_action")) {
       this.db.exec("ALTER TABLE approval_requests ADD COLUMN recommended_action TEXT");
+    }
+    if (!apColNames.has("requested_by")) {
+      this.db.exec("ALTER TABLE approval_requests ADD COLUMN requested_by TEXT");
+    }
+    if (!apColNames.has("reviewer_run_id")) {
+      this.db.exec("ALTER TABLE approval_requests ADD COLUMN reviewer_run_id TEXT");
     }
   }
 
@@ -416,6 +476,9 @@ export class StateStore {
         | "agentProfile"
         | "blockedReason"
         | "nextAction"
+        | "requestedModel"
+        | "actualProvider"
+        | "actualModel"
       >
     >
   ): WorkflowRun {
@@ -471,6 +534,18 @@ export class StateStore {
     if (fields.nextAction !== undefined) {
       sets.push("next_action = ?");
       values.push(fields.nextAction);
+    }
+    if (fields.requestedModel !== undefined) {
+      sets.push("requested_model = ?");
+      values.push(fields.requestedModel);
+    }
+    if (fields.actualProvider !== undefined) {
+      sets.push("actual_provider = ?");
+      values.push(fields.actualProvider);
+    }
+    if (fields.actualModel !== undefined) {
+      sets.push("actual_model = ?");
+      values.push(fields.actualModel);
     }
 
     values.push(id);
@@ -528,6 +603,9 @@ export class StateStore {
       eventsPath?: string;
       iterations?: number;
       costUsd?: number;
+      stderrPath?: string;
+      stdoutPath?: string;
+      exitReason?: string;
     }
   ): AgentRun {
     const now = new Date().toISOString();
@@ -535,7 +613,7 @@ export class StateStore {
     this.db
       .prepare(
         `UPDATE agent_runs
-         SET status = ?, finished_at = ?, output_path = ?, events_path = ?, iterations = ?, cost_usd = ?
+         SET status = ?, finished_at = ?, output_path = ?, events_path = ?, iterations = ?, cost_usd = ?, stderr_path = ?, stdout_path = ?, exit_reason = ?
          WHERE id = ?`
       )
       .run(
@@ -545,6 +623,9 @@ export class StateStore {
         result.eventsPath ?? null,
         result.iterations ?? null,
         result.costUsd ?? null,
+        result.stderrPath ?? null,
+        result.stdoutPath ?? null,
+        result.exitReason ?? null,
         id
       );
 
@@ -602,14 +683,16 @@ export class StateStore {
     verdict?: string;
     blockingCount?: number;
     confidence?: number;
+    warningCount?: number;
+    riskLevel?: string;
   }): Artifact {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
 
     this.db
       .prepare(
-        `INSERT INTO artifacts (id, workflow_run_id, agent_run_id, type, phase, summary, data, file_path, created_at, verdict, blocking_count, confidence)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO artifacts (id, workflow_run_id, agent_run_id, type, phase, summary, data, file_path, created_at, verdict, blocking_count, confidence, warning_count, risk_level)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -624,6 +707,8 @@ export class StateStore {
         opts.verdict ?? null,
         opts.blockingCount ?? null,
         opts.confidence ?? null,
+        opts.warningCount ?? null,
+        opts.riskLevel ?? null,
       );
 
     return this.getArtifact(id)!;
@@ -663,14 +748,16 @@ export class StateStore {
     summary: string;
     severity?: "low" | "medium" | "high" | "critical";
     recommendedAction?: string;
+    requestedBy?: string;
+    reviewerRunId?: string;
   }): ApprovalRequest {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
 
     this.db
       .prepare(
-        `INSERT INTO approval_requests (id, workflow_run_id, phase, summary, created_at, severity, recommended_action)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO approval_requests (id, workflow_run_id, phase, summary, created_at, severity, recommended_action, requested_by, reviewer_run_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -680,6 +767,8 @@ export class StateStore {
         now,
         opts.severity ?? null,
         opts.recommendedAction ?? null,
+        opts.requestedBy ?? null,
+        opts.reviewerRunId ?? null,
       );
 
     return this.getApprovalRequest(id)!;
