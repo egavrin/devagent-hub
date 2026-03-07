@@ -8,6 +8,7 @@ import { ArtifactPane } from "../tui/components/artifact-pane.js";
 import { TimelinePane } from "../tui/components/timeline-pane.js";
 import { WhyPausedPanel } from "../tui/components/why-paused-panel.js";
 import { AutopilotBar } from "../tui/components/autopilot-bar.js";
+import { ApprovalQueueView, resolveInboxItem } from "../tui/components/approval-queue-view.js";
 import type { WorkflowRun, Artifact, AgentRun, StatusTransition, ApprovalRequest } from "../state/types.js";
 
 // ─── Test fixtures ──────────────────────────────────────────
@@ -217,13 +218,45 @@ describe("ContextFooter render", () => {
     expect(frame).toContain("Q");
   });
 
-  it("renders approval hints", () => {
+  it("renders approval hints with plan_draft status", () => {
     const { lastFrame } = render(
-      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} />,
+      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="plan_draft" />,
     );
     const frame = lastFrame()!;
     expect(frame).toContain("approve");
     expect(frame).toContain("rework");
+  });
+
+  it("renders approval hints for awaiting_human_review", () => {
+    const { lastFrame } = render(
+      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="awaiting_human_review" />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("approve review");
+    expect(frame).toContain("open PR");
+  });
+
+  it("renders approval hints for ready_to_merge", () => {
+    const { lastFrame } = render(
+      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="ready_to_merge" />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("mark done");
+    expect(frame).toContain("open PR");
+  });
+
+  it("renders approval hints for failed", () => {
+    const { lastFrame } = render(
+      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="failed" />,
+    );
+    expect(lastFrame()!).toContain("retry");
+  });
+
+  it("renders approval hints for escalated", () => {
+    const { lastFrame } = render(
+      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="escalated" />,
+    );
+    expect(lastFrame()!).toContain("take-over");
   });
 
   it("renders run hints with approve for plan_draft", () => {
@@ -439,5 +472,136 @@ describe("AutopilotBar render", () => {
       <AutopilotBar running={true} lastPoll={null} activeCount={0} totalDispatched={0} />,
     );
     expect(lastFrame()!).toContain("pending");
+  });
+});
+
+// ─── resolveInboxItem ──────────────────────────────────────
+
+describe("resolveInboxItem", () => {
+  const approvalItems = [
+    { approval: { id: "a1", workflowRunId: "r1", phase: "plan", action: null, summary: "", reviewerComment: null, resolvedAt: null, createdAt: new Date().toISOString(), severity: null, recommendedAction: null, requestedBy: null, reviewerRunId: null } as ApprovalRequest, run: makeRun({ id: "r1" }) },
+  ];
+  const awaitingReview = [makeRun({ id: "r2", status: "awaiting_human_review" })];
+  const readyToMerge = [makeRun({ id: "r3", status: "ready_to_merge" })];
+  const escalated = [makeRun({ id: "r4", status: "escalated" })];
+  const failed = [makeRun({ id: "r5", status: "failed" })];
+
+  it("resolves approval item at index 0", () => {
+    const item = resolveInboxItem(approvalItems, awaitingReview, readyToMerge, escalated, failed, 0);
+    expect(item?.kind).toBe("approval");
+    expect(item?.run?.id).toBe("r1");
+    expect(item?.approval?.id).toBe("a1");
+  });
+
+  it("resolves awaiting_review item", () => {
+    const item = resolveInboxItem(approvalItems, awaitingReview, readyToMerge, escalated, failed, 1);
+    expect(item?.kind).toBe("awaiting_review");
+    expect(item?.run?.id).toBe("r2");
+  });
+
+  it("resolves ready_to_merge item", () => {
+    const item = resolveInboxItem(approvalItems, awaitingReview, readyToMerge, escalated, failed, 2);
+    expect(item?.kind).toBe("ready_to_merge");
+    expect(item?.run?.id).toBe("r3");
+  });
+
+  it("resolves escalated item", () => {
+    const item = resolveInboxItem(approvalItems, awaitingReview, readyToMerge, escalated, failed, 3);
+    expect(item?.kind).toBe("escalated");
+    expect(item?.run?.id).toBe("r4");
+  });
+
+  it("resolves failed item", () => {
+    const item = resolveInboxItem(approvalItems, awaitingReview, readyToMerge, escalated, failed, 4);
+    expect(item?.kind).toBe("blocked");
+    expect(item?.run?.id).toBe("r5");
+  });
+
+  it("returns null for out-of-bounds index", () => {
+    const item = resolveInboxItem(approvalItems, awaitingReview, readyToMerge, escalated, failed, 99);
+    expect(item).toBeNull();
+  });
+
+  it("works with empty sections", () => {
+    const item = resolveInboxItem([], [], [makeRun({ id: "r3" })], [], [], 0);
+    expect(item?.kind).toBe("ready_to_merge");
+    expect(item?.run?.id).toBe("r3");
+  });
+});
+
+// ─── ApprovalQueueView ─────────────────────────────────────
+
+describe("ApprovalQueueView render", () => {
+  it("renders empty state", () => {
+    const { lastFrame } = render(
+      <ApprovalQueueView items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={[]} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
+    );
+    expect(lastFrame()!).toContain("No pending items");
+  });
+
+  it("renders pending approvals section", () => {
+    const items = [{
+      approval: { id: "a1", workflowRunId: "r1", phase: "plan", action: null, summary: "Plan review", reviewerComment: null, resolvedAt: null, createdAt: new Date().toISOString(), severity: null, recommendedAction: null, requestedBy: null, reviewerRunId: null } as ApprovalRequest,
+      run: makeRun({ id: "r1", status: "plan_draft" }),
+    }];
+    const { lastFrame } = render(
+      <ApprovalQueueView items={items} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={[]} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Pending Approvals");
+    expect(frame).toContain("#42");
+    expect(frame).toContain("plan");
+  });
+
+  it("renders awaiting human review section", () => {
+    const reviewRuns = [makeRun({ id: "r2", status: "awaiting_human_review", prUrl: "https://github.com/test/repo/pull/10" })];
+    const { lastFrame } = render(
+      <ApprovalQueueView items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={reviewRuns} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Awaiting Human Review");
+    expect(frame).toContain("#42");
+    expect(frame).toContain("mark reviewed");
+  });
+
+  it("renders ready to merge section", () => {
+    const mergeRuns = [makeRun({ id: "r3", status: "ready_to_merge" })];
+    const { lastFrame } = render(
+      <ApprovalQueueView items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={[]} readyToMergeRuns={mergeRuns} selectedIndex={0} height={20} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Ready to Merge");
+    expect(frame).toContain("mark done");
+  });
+
+  it("renders escalated section separately from failed", () => {
+    const escalated = [makeRun({ id: "r4", status: "escalated" })];
+    const failed = [makeRun({ id: "r5", status: "failed" })];
+    const { lastFrame } = render(
+      <ApprovalQueueView items={[]} escalatedRuns={escalated} failedRuns={failed} awaitingReviewRuns={[]} readyToMergeRuns={[]} selectedIndex={0} height={30} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Escalated");
+    expect(frame).toContain("Failed");
+  });
+
+  it("shows total item count", () => {
+    const items = [{
+      approval: { id: "a1", workflowRunId: "r1", phase: "plan", action: null, summary: "", reviewerComment: null, resolvedAt: null, createdAt: new Date().toISOString(), severity: null, recommendedAction: null, requestedBy: null, reviewerRunId: null } as ApprovalRequest,
+      run: makeRun({ id: "r1" }),
+    }];
+    const reviewRuns = [makeRun({ id: "r2", status: "awaiting_human_review" })];
+    const { lastFrame } = render(
+      <ApprovalQueueView items={items} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={reviewRuns} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
+    );
+    expect(lastFrame()!).toContain("2 items");
+  });
+
+  it("shows mode badge for watch runs", () => {
+    const reviewRuns = [makeRun({ id: "r2", status: "awaiting_human_review", mode: "watch" })];
+    const { lastFrame } = render(
+      <ApprovalQueueView items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={reviewRuns} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
+    );
+    expect(lastFrame()!).toContain("[W]");
   });
 });
