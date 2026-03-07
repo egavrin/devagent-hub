@@ -10,6 +10,7 @@ interface ArtifactPaneProps {
   isFocused: boolean;
   height: number;
   showDiff?: boolean;
+  onJumpToAgentRun?: (agentRunId: string) => void;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -152,7 +153,7 @@ function renderPlanSections(
   }
 }
 
-export function ArtifactPane({ artifacts, approvals, agentRuns, isFocused, height, showDiff }: ArtifactPaneProps) {
+export function ArtifactPane({ artifacts, approvals, agentRuns, isFocused, height, showDiff, onJumpToAgentRun }: ArtifactPaneProps) {
   const lines: Array<{ key: string; node: React.ReactNode }> = [];
 
   // Build agent run lookup for attribution
@@ -244,6 +245,7 @@ export function ArtifactPane({ artifacts, approvals, agentRuns, isFocused, heigh
           <Text color={color}>{a.type}</Text>
           {verdictBadge(a)}
           {kindTag ? <Text color="blue">{kindTag}</Text> : ""}
+          {a.agentRunId && onJumpToAgentRun ? <Text color="cyan"> [→]</Text> : ""}
           <Text dimColor> {truncate(a.summary, 40)}</Text>
         </Text>
       )});

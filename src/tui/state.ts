@@ -9,6 +9,9 @@ export type Dialog = null | "new-run" | "rework" | "command-palette" | "help" | 
 export type NewRunSourceType = "issue" | "pr";
 export type NewRunMode = "assisted" | "watch" | "autopilot-once";
 
+export type GateStrictness = "normal" | "strict" | "lenient";
+export type RunPriority = "normal" | "high" | "urgent";
+
 export interface NewRunForm {
   sourceType: NewRunSourceType;
   sourceId: string;
@@ -16,7 +19,11 @@ export interface NewRunForm {
   profile: string;  // selected profile name, empty = default
   runner: string;   // runner binary name, empty = default from config
   model: string;    // model override, empty = from profile
+  gateStrictness: GateStrictness;
+  priority: RunPriority;
 }
+
+export type JumpTarget = "latest_artifact" | "latest_gate" | "last_error";
 
 export interface UIState {
   screen: Screen;
@@ -35,6 +42,8 @@ export interface UIState {
   filterQuery: string;
   filterActive: boolean;
   rerunProfileIndex: number;
+  jumpTarget: JumpTarget | null;
+  scrollToAgentRunId: string | null;
 }
 
 export type UIAction =
@@ -53,6 +62,11 @@ export type UIAction =
   | { type: "SET_NEW_RUN_PROFILE"; profile: string }
   | { type: "SET_NEW_RUN_RUNNER"; runner: string }
   | { type: "SET_NEW_RUN_MODEL"; model: string }
+  | { type: "SET_NEW_RUN_GATE_STRICTNESS"; gateStrictness: GateStrictness }
+  | { type: "SET_NEW_RUN_PRIORITY"; priority: RunPriority }
+  | { type: "JUMP_TO"; target: JumpTarget }
+  | { type: "CLEAR_JUMP" }
+  | { type: "JUMP_TO_AGENT_RUN"; agentRunId: string }
   | { type: "SET_REWORK_NOTE"; value: string }
   | { type: "SET_FOCUSED_COLUMN"; index: number }
   | { type: "SET_FOCUSED_ROW"; index: number }
@@ -74,7 +88,7 @@ export const initialUIState: UIState = {
   logMode: "structured",
   inputMode: false,
   dialog: null,
-  newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted", profile: "", runner: "", model: "" },
+  newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted", profile: "", runner: "", model: "", gateStrictness: "normal", priority: "normal" },
   reworkNote: "",
   focusedColumnIndex: 0,
   focusedRowIndex: 0,
@@ -84,6 +98,8 @@ export const initialUIState: UIState = {
   filterQuery: "",
   filterActive: false,
   rerunProfileIndex: 0,
+  jumpTarget: null,
+  scrollToAgentRunId: null,
 };
 
 export function uiReducer(state: UIState, action: UIAction): UIState {
@@ -120,7 +136,7 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
         ...state,
         dialog: action.dialog,
         ...(action.dialog === "new-run"
-          ? { newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted", profile: "", runner: "", model: "" } }
+          ? { newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted", profile: "", runner: "", model: "", gateStrictness: "normal", priority: "normal" } }
           : {}),
         ...(action.dialog === "rework" ? { reworkNote: "" } : {}),
         ...(action.dialog === "rerun" ? { rerunProfileIndex: 0 } : {}),
@@ -146,6 +162,23 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
 
     case "SET_NEW_RUN_MODEL":
       return { ...state, newRunForm: { ...state.newRunForm, model: action.model } };
+
+    case "SET_NEW_RUN_GATE_STRICTNESS":
+      return { ...state, newRunForm: { ...state.newRunForm, gateStrictness: action.gateStrictness } };
+
+    case "SET_NEW_RUN_PRIORITY":
+      return { ...state, newRunForm: { ...state.newRunForm, priority: action.priority } };
+
+    case "JUMP_TO": {
+      const pane = action.target === "latest_artifact" ? "artifact" as FocusPane : "timeline" as FocusPane;
+      return { ...state, jumpTarget: action.target, focusedPane: pane, scrollToAgentRunId: null };
+    }
+
+    case "CLEAR_JUMP":
+      return { ...state, jumpTarget: null, scrollToAgentRunId: null };
+
+    case "JUMP_TO_AGENT_RUN":
+      return { ...state, focusedPane: "timeline" as FocusPane, scrollToAgentRunId: action.agentRunId, jumpTarget: null };
 
     case "SET_REWORK_NOTE":
       return { ...state, reworkNote: action.value };

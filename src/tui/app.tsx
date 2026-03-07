@@ -33,7 +33,7 @@ import { CommandPalette } from "./components/command-palette.js";
 import type { PaletteCommand } from "./components/command-palette.js";
 import { HelpDialog } from "./components/help-dialog.js";
 import { uiReducer, initialUIState } from "./state.js";
-import type { FocusPane, LogMode } from "./state.js";
+import type { FocusPane, LogMode, GateStrictness, RunPriority } from "./state.js";
 
 interface AppProps {
   store: StateStore;
@@ -99,10 +99,12 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
             supportedPhases: desc?.supportedPhases ?? [],
             availableProviders: desc?.availableProviders ?? [],
             supportedApprovalModes: desc?.supportedApprovalModes ?? [],
+            mcpServers: desc?.mcpServers ?? [],
+            tools: desc?.tools ?? [],
             healthy: desc !== null,
           });
         } catch {
-          infos.push({ bin, version: null, supportedPhases: [], availableProviders: [], supportedApprovalModes: [], healthy: false });
+          infos.push({ bin, version: null, supportedPhases: [], availableProviders: [], supportedApprovalModes: [], mcpServers: [], tools: [], healthy: false });
         }
       }
       setRunnerInfos(infos);
@@ -140,6 +142,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
   const failedRuns = runs.filter((r) => r.status === "failed");
   const awaitingReviewRuns = runs.filter((r) => r.status === "awaiting_human_review");
   const readyToMergeRuns = runs.filter((r) => r.status === "ready_to_merge");
+  const planRevisionRuns = runs.filter((r) => r.status === "plan_revision");
 
   // Active process tracking
   const [activeProcessId, setActiveProcessId] = React.useState<string | null>(null);
@@ -189,7 +192,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
 
   const handleNavigate = useCallback((direction: "up" | "down" | "left" | "right") => {
     if (ui.screen === "approvals") {
-      const totalItems = approvalQueueItems.length + awaitingReviewRuns.length + readyToMergeRuns.length + escalatedRuns.length + failedRuns.length;
+      const totalItems = approvalQueueItems.length + planRevisionRuns.length + awaitingReviewRuns.length + readyToMergeRuns.length + escalatedRuns.length + failedRuns.length;
       if (totalItems === 0) return;
       let newIndex = ui.approvalIndex;
       if (direction === "up") {
@@ -199,7 +202,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
       }
       dispatch({ type: "SET_APPROVAL_INDEX", index: newIndex });
       // Sync selectedRunId so action handlers target the right run
-      const item = resolveInboxItem(approvalQueueItems, awaitingReviewRuns, readyToMergeRuns, escalatedRuns, failedRuns, newIndex);
+      const item = resolveInboxItem(approvalQueueItems, planRevisionRuns, awaitingReviewRuns, readyToMergeRuns, escalatedRuns, failedRuns, newIndex);
       if (item?.run) {
         dispatch({ type: "SELECT_RUN", runId: item.run.id });
       }
@@ -241,7 +244,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
         dispatch({ type: "OPEN_RUN", runId: run.id });
       }
     } else if (ui.screen === "approvals") {
-      const item = resolveInboxItem(approvalQueueItems, awaitingReviewRuns, readyToMergeRuns, escalatedRuns, failedRuns, ui.approvalIndex);
+      const item = resolveInboxItem(approvalQueueItems, planRevisionRuns, awaitingReviewRuns, readyToMergeRuns, escalatedRuns, failedRuns, ui.approvalIndex);
       if (item?.run) {
         dispatch({ type: "OPEN_RUN", runId: item.run.id });
       }
@@ -253,7 +256,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
   const getApprovalTarget = useCallback((): { issueNumber: number; runId: string } | null => {
     // In approvals screen, resolve the focused item from any section
     if (ui.screen === "approvals") {
-      const item = resolveInboxItem(approvalQueueItems, awaitingReviewRuns, readyToMergeRuns, escalatedRuns, failedRuns, ui.approvalIndex);
+      const item = resolveInboxItem(approvalQueueItems, planRevisionRuns, awaitingReviewRuns, readyToMergeRuns, escalatedRuns, failedRuns, ui.approvalIndex);
       if (item?.run) return { issueNumber: item.run.issueNumber, runId: item.run.id };
     }
     // Otherwise use selected run
@@ -359,8 +362,28 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
     );
   }, [selectedRun, orchestrator, store, showStatus]);
 
+  const handleRerunReviewer = useCallback(() => {
+    if (!selectedRun) return;
+    if (selectedRun.status !== "awaiting_human_review") {
+      showStatus("Rerun reviewer only works on awaiting_human_review");
+      return;
+    }
+    const issue = selectedRun.issueNumber;
+    store.updateStatus(selectedRun.id, "draft_pr_opened", "Reviewer rerun requested");
+    showStatus(`Rerunning reviewer for #${issue}...`, true);
+    orchestrator.review(issue).then(
+      () => showStatus(`Review rerun complete for #${issue}`),
+      (err: unknown) => showStatus(`Reviewer rerun failed: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }, [selectedRun, store, orchestrator, showStatus]);
+
   const handleRetry = useCallback(() => {
     if (!selectedRun) return;
+    // Redirect to rerun reviewer if in awaiting_human_review
+    if (selectedRun.status === "awaiting_human_review") {
+      handleRerunReviewer();
+      return;
+    }
     if (selectedRun.status !== "failed") {
       showStatus("Retry only works on failed runs");
       return;
@@ -425,7 +448,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
       () => showStatus(`${retry.label} complete for #${issue} -- press C to continue`),
       (err: unknown) => showStatus(`Retry failed: ${err instanceof Error ? err.message : String(err)}`),
     );
-  }, [selectedRun, orchestrator, store, showStatus]);
+  }, [selectedRun, handleRerunReviewer, orchestrator, store, showStatus]);
 
   const handleKill = useCallback(() => {
     if (!activeProcessId) return;
@@ -550,7 +573,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
       showStatus("Invalid number");
       return;
     }
-    const { sourceType, mode, profile, model } = ui.newRunForm;
+    const { sourceType, mode, profile, runner, model, gateStrictness, priority } = ui.newRunForm;
     dispatch({ type: "CLOSE_DIALOG" });
 
     const isAutoMode = mode === "watch" || mode === "autopilot-once";
@@ -567,9 +590,10 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
       (run) => {
         // Store source type, profile, and model overrides on the run
         const updates: Record<string, unknown> = {
-          metadata: { ...(run.metadata as Record<string, unknown>), sourceType },
+          metadata: { ...(run.metadata as Record<string, unknown>), sourceType, gateStrictness, priority },
         };
         if (profile) (updates as any).agentProfile = profile;
+        if (runner) (updates as any).runnerId = runner;
         if (model) (updates as any).requestedModel = model;
         store.updateWorkflowRun(run.id, updates as any);
         dispatch({ type: "OPEN_RUN", runId: run.id });
@@ -665,6 +689,27 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
     }
   }, [autopilotRunning, config, github, repo, store, orchestrator, showStatus]);
 
+  // ─── Jump handlers ────────────────────────────────────────────
+
+  const handleJumpArtifact = useCallback(() => {
+    if (ui.screen !== "run") return;
+    dispatch({ type: "JUMP_TO", target: "latest_artifact" });
+  }, [ui.screen]);
+
+  const handleJumpGate = useCallback(() => {
+    if (ui.screen !== "run") return;
+    dispatch({ type: "JUMP_TO", target: "latest_gate" });
+  }, [ui.screen]);
+
+  const handleJumpError = useCallback(() => {
+    if (ui.screen !== "run") return;
+    dispatch({ type: "JUMP_TO", target: "last_error" });
+  }, [ui.screen]);
+
+  const handleJumpToAgentRun = useCallback((agentRunId: string) => {
+    dispatch({ type: "JUMP_TO_AGENT_RUN", agentRunId });
+  }, []);
+
   // ─── Keybindings ─────────────────────────────────────────────
 
   const isDialogOpen = ui.dialog !== null;
@@ -700,6 +745,9 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
     onEscalate: isDialogOpen ? () => {} : handleEscalate,
     onSettingsView: isDialogOpen ? () => {} : () => dispatch({ type: "SET_SCREEN", screen: "settings" }),
     onRerunWithProfile: isDialogOpen ? () => {} : handleRerunWithProfile,
+    onJumpArtifact: isDialogOpen ? () => {} : handleJumpArtifact,
+    onJumpGate: isDialogOpen ? () => {} : handleJumpGate,
+    onJumpError: isDialogOpen ? () => {} : handleJumpError,
     onPaneShortcut: (index: number) => {
       const paneMap: [FocusPane, LogMode | null][] = [
         ["queue", null],
@@ -735,7 +783,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
           dispatch({ type: "SELECT_RUN", runId: colRuns[lastIdx].id });
         }
       } else if (ui.screen === "approvals") {
-        const totalItems = approvalQueueItems.length + awaitingReviewRuns.length + readyToMergeRuns.length + escalatedRuns.length + failedRuns.length;
+        const totalItems = approvalQueueItems.length + planRevisionRuns.length + awaitingReviewRuns.length + readyToMergeRuns.length + escalatedRuns.length + failedRuns.length;
         dispatch({ type: "SET_APPROVAL_INDEX", index: Math.max(0, totalItems - 1) });
       }
     },
@@ -776,6 +824,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
                 isFocused={ui.focusedPane === "artifact"}
                 height={paneHeight * 2}
                 showDiff={ui.showArtifactDiff}
+                onJumpToAgentRun={handleJumpToAgentRun}
               />
             </Box>
 
@@ -787,6 +836,8 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
                 artifacts={artifacts}
                 isFocused={ui.focusedPane === "timeline"}
                 height={paneHeight}
+                jumpTarget={ui.jumpTarget}
+                scrollToAgentRunId={ui.scrollToAgentRunId}
               />
               <LogPane
                 selectedRun={selectedRun}
@@ -806,6 +857,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
         /* ── Approvals screen ─────────────────────────────── */
         <ApprovalQueueView
           items={approvalQueueItems}
+          planRevisionRuns={planRevisionRuns}
           escalatedRuns={escalatedRuns}
           failedRuns={failedRuns}
           awaitingReviewRuns={awaitingReviewRuns}
@@ -907,6 +959,8 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
             onChangeProfile={(p) => dispatch({ type: "SET_NEW_RUN_PROFILE", profile: p })}
             onChangeRunner={(r) => dispatch({ type: "SET_NEW_RUN_RUNNER", runner: r })}
             onChangeModel={(m) => dispatch({ type: "SET_NEW_RUN_MODEL", model: m })}
+            onChangeGateStrictness={(g) => dispatch({ type: "SET_NEW_RUN_GATE_STRICTNESS", gateStrictness: g })}
+            onChangePriority={(p) => dispatch({ type: "SET_NEW_RUN_PRIORITY", priority: p })}
             onSubmit={handleNewRunSubmit}
             onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
           />

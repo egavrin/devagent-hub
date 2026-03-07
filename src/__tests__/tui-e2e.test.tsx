@@ -66,6 +66,8 @@ describe("New run dialog flow", () => {
       profile: "",
       runner: "",
       model: "",
+      gateStrictness: "normal",
+      priority: "normal",
     });
   });
 
@@ -117,6 +119,8 @@ describe("New run dialog flow", () => {
       profile: "",
       runner: "",
       model: "",
+      gateStrictness: "normal",
+      priority: "normal",
     });
   });
 });

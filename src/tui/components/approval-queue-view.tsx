@@ -7,7 +7,7 @@ interface ApprovalQueueItem {
   run: WorkflowRun | undefined;
 }
 
-export type InboxItemKind = "approval" | "awaiting_review" | "ready_to_merge" | "blocked" | "escalated";
+export type InboxItemKind = "approval" | "plan_revision" | "awaiting_review" | "ready_to_merge" | "blocked" | "escalated";
 
 export interface InboxItem {
   kind: InboxItemKind;
@@ -17,6 +17,7 @@ export interface InboxItem {
 
 export function resolveInboxItem(
   items: ApprovalQueueItem[],
+  planRevisionRuns: WorkflowRun[],
   awaitingReviewRuns: WorkflowRun[],
   readyToMergeRuns: WorkflowRun[],
   escalatedRuns: WorkflowRun[],
@@ -28,6 +29,10 @@ export function resolveInboxItem(
     return { kind: "approval", run: items[idx].run, approval: items[idx].approval };
   }
   idx -= items.length;
+  if (idx < planRevisionRuns.length) {
+    return { kind: "plan_revision", run: planRevisionRuns[idx] };
+  }
+  idx -= planRevisionRuns.length;
   if (idx < awaitingReviewRuns.length) {
     return { kind: "awaiting_review", run: awaitingReviewRuns[idx] };
   }
@@ -48,6 +53,7 @@ export function resolveInboxItem(
 
 interface ApprovalQueueViewProps {
   items: ApprovalQueueItem[];
+  planRevisionRuns: WorkflowRun[];
   escalatedRuns: WorkflowRun[];
   failedRuns: WorkflowRun[];
   awaitingReviewRuns: WorkflowRun[];
@@ -90,9 +96,17 @@ function truncTitle(title: string, max: number): string {
   return title.length > max ? title.slice(0, max - 1) + "\u2026" : title;
 }
 
-export function ApprovalQueueView({ items, escalatedRuns, failedRuns, awaitingReviewRuns, readyToMergeRuns, selectedIndex, height }: ApprovalQueueViewProps) {
+export function ApprovalQueueView({ items, planRevisionRuns, escalatedRuns, failedRuns, awaitingReviewRuns, readyToMergeRuns, selectedIndex, height }: ApprovalQueueViewProps) {
   const allItems: Array<{ key: string; node: React.ReactNode }> = [];
   let selectableIndex = 0;
+
+  // Near-merge PRs summary (non-selectable header)
+  const nearMergeCount = [...readyToMergeRuns, ...awaitingReviewRuns].filter((r) => r.prUrl).length;
+  if (nearMergeCount > 0) {
+    allItems.push({ key: "near-merge-summary", node: (
+      <Text bold color="green">Near-Merge PRs: {nearMergeCount}</Text>
+    )});
+  }
 
   // Pending approvals section
   if (items.length > 0) {
@@ -131,6 +145,36 @@ export function ApprovalQueueView({ items, escalatedRuns, failedRuns, awaitingRe
           <Text dimColor>{truncTitle(title, 30)}</Text>
           {"  "}
           <Text color={ageColor}>{ageStr}</Text>
+        </Text>
+      )});
+      selectableIndex++;
+    }
+  }
+
+  // Pending stage reworks section
+  if (planRevisionRuns.length > 0) {
+    allItems.push({ key: "revision-sep", node: <Text dimColor>{"\u2500".repeat(50)}</Text> });
+    allItems.push({ key: "revision-hdr", node: (
+      <Box gap={2}>
+        <Text bold color="yellow">Pending Reworks ({planRevisionRuns.length})</Text>
+        <Text dimColor>A approve  W rework  C continue</Text>
+      </Box>
+    )});
+
+    for (const r of planRevisionRuns) {
+      const title = ((r.metadata as Record<string, unknown>)?.title as string) ?? "";
+      const isSelected = selectableIndex === selectedIndex;
+
+      allItems.push({ key: `revision-${r.id}`, node: (
+        <Text inverse={isSelected} bold={isSelected}>
+          {isSelected ? ">" : " "}
+          <Text color="yellow"> #{r.issueNumber}</Text>
+          {" "}
+          {modeBadge(r.mode)}
+          {" "}
+          <Text dimColor>{truncTitle(title, 30)}</Text>
+          {"  "}
+          <Text dimColor>{formatAge(r.updatedAt)}</Text>
         </Text>
       )});
       selectableIndex++;
@@ -267,7 +311,7 @@ export function ApprovalQueueView({ items, escalatedRuns, failedRuns, awaitingRe
     allItems.push({ key: "empty", node: <Text dimColor>No pending items. All clear!</Text> });
   }
 
-  const totalSelectable = items.length + awaitingReviewRuns.length + readyToMergeRuns.length + escalatedRuns.length + failedRuns.length;
+  const totalSelectable = items.length + planRevisionRuns.length + awaitingReviewRuns.length + readyToMergeRuns.length + escalatedRuns.length + failedRuns.length;
   const visible = allItems.slice(0, Math.max(height - 4, 5));
 
   return (

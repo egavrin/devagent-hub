@@ -269,8 +269,9 @@ describe("ContextFooter render", () => {
       <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="awaiting_human_review" />,
     );
     const frame = lastFrame()!;
-    expect(frame).toContain("approve review");
-    expect(frame).toContain("open PR");
+    expect(frame).toContain("approve");
+    expect(frame).toContain("mark review");
+    expect(frame).toContain("rerun review");
   });
 
   it("renders approval hints for ready_to_merge", () => {
@@ -309,7 +310,8 @@ describe("ContextFooter render", () => {
     const { lastFrame } = render(
       <ContextFooter screen="run" dialog={null} inputMode={false} runStatus="failed" hasActiveProcess={false} />,
     );
-    expect(lastFrame()!).toContain("retry");
+    expect(lastFrame()!).toContain("R");
+    expect(lastFrame()!).toContain("retr");
   });
 
   it("shows kill when process active", () => {
@@ -547,43 +549,43 @@ describe("resolveInboxItem", () => {
   const failed = [makeRun({ id: "r5", status: "failed" })];
 
   it("resolves approval item at index 0", () => {
-    const item = resolveInboxItem(approvalItems, awaitingReview, readyToMerge, escalated, failed, 0);
+    const item = resolveInboxItem(approvalItems, [], awaitingReview, readyToMerge, escalated, failed, 0);
     expect(item?.kind).toBe("approval");
     expect(item?.run?.id).toBe("r1");
     expect(item?.approval?.id).toBe("a1");
   });
 
   it("resolves awaiting_review item", () => {
-    const item = resolveInboxItem(approvalItems, awaitingReview, readyToMerge, escalated, failed, 1);
+    const item = resolveInboxItem(approvalItems, [], awaitingReview, readyToMerge, escalated, failed, 1);
     expect(item?.kind).toBe("awaiting_review");
     expect(item?.run?.id).toBe("r2");
   });
 
   it("resolves ready_to_merge item", () => {
-    const item = resolveInboxItem(approvalItems, awaitingReview, readyToMerge, escalated, failed, 2);
+    const item = resolveInboxItem(approvalItems, [], awaitingReview, readyToMerge, escalated, failed, 2);
     expect(item?.kind).toBe("ready_to_merge");
     expect(item?.run?.id).toBe("r3");
   });
 
   it("resolves escalated item", () => {
-    const item = resolveInboxItem(approvalItems, awaitingReview, readyToMerge, escalated, failed, 3);
+    const item = resolveInboxItem(approvalItems, [], awaitingReview, readyToMerge, escalated, failed, 3);
     expect(item?.kind).toBe("escalated");
     expect(item?.run?.id).toBe("r4");
   });
 
   it("resolves failed item", () => {
-    const item = resolveInboxItem(approvalItems, awaitingReview, readyToMerge, escalated, failed, 4);
+    const item = resolveInboxItem(approvalItems, [], awaitingReview, readyToMerge, escalated, failed, 4);
     expect(item?.kind).toBe("blocked");
     expect(item?.run?.id).toBe("r5");
   });
 
   it("returns null for out-of-bounds index", () => {
-    const item = resolveInboxItem(approvalItems, awaitingReview, readyToMerge, escalated, failed, 99);
+    const item = resolveInboxItem(approvalItems, [], awaitingReview, readyToMerge, escalated, failed, 99);
     expect(item).toBeNull();
   });
 
   it("works with empty sections", () => {
-    const item = resolveInboxItem([], [], [makeRun({ id: "r3" })], [], [], 0);
+    const item = resolveInboxItem([], [], [], [makeRun({ id: "r3" })], [], [], 0);
     expect(item?.kind).toBe("ready_to_merge");
     expect(item?.run?.id).toBe("r3");
   });
@@ -594,7 +596,7 @@ describe("resolveInboxItem", () => {
 describe("ApprovalQueueView render", () => {
   it("renders empty state", () => {
     const { lastFrame } = render(
-      <ApprovalQueueView items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={[]} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
+      <ApprovalQueueView planRevisionRuns={[]} items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={[]} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
     );
     expect(lastFrame()!).toContain("No pending items");
   });
@@ -605,7 +607,7 @@ describe("ApprovalQueueView render", () => {
       run: makeRun({ id: "r1", status: "plan_draft" }),
     }];
     const { lastFrame } = render(
-      <ApprovalQueueView items={items} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={[]} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
+      <ApprovalQueueView planRevisionRuns={[]} items={items} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={[]} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
     );
     const frame = lastFrame()!;
     expect(frame).toContain("Pending Approvals");
@@ -616,7 +618,7 @@ describe("ApprovalQueueView render", () => {
   it("renders awaiting human review section", () => {
     const reviewRuns = [makeRun({ id: "r2", status: "awaiting_human_review", prUrl: "https://github.com/test/repo/pull/10" })];
     const { lastFrame } = render(
-      <ApprovalQueueView items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={reviewRuns} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
+      <ApprovalQueueView planRevisionRuns={[]} items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={reviewRuns} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
     );
     const frame = lastFrame()!;
     expect(frame).toContain("Awaiting Human Review");
@@ -627,7 +629,7 @@ describe("ApprovalQueueView render", () => {
   it("renders ready to merge section", () => {
     const mergeRuns = [makeRun({ id: "r3", status: "ready_to_merge" })];
     const { lastFrame } = render(
-      <ApprovalQueueView items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={[]} readyToMergeRuns={mergeRuns} selectedIndex={0} height={20} />,
+      <ApprovalQueueView planRevisionRuns={[]} items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={[]} readyToMergeRuns={mergeRuns} selectedIndex={0} height={20} />,
     );
     const frame = lastFrame()!;
     expect(frame).toContain("Ready to Merge");
@@ -638,7 +640,7 @@ describe("ApprovalQueueView render", () => {
     const escalated = [makeRun({ id: "r4", status: "escalated" })];
     const failed = [makeRun({ id: "r5", status: "failed" })];
     const { lastFrame } = render(
-      <ApprovalQueueView items={[]} escalatedRuns={escalated} failedRuns={failed} awaitingReviewRuns={[]} readyToMergeRuns={[]} selectedIndex={0} height={30} />,
+      <ApprovalQueueView planRevisionRuns={[]} items={[]} escalatedRuns={escalated} failedRuns={failed} awaitingReviewRuns={[]} readyToMergeRuns={[]} selectedIndex={0} height={30} />,
     );
     const frame = lastFrame()!;
     expect(frame).toContain("Escalated");
@@ -652,7 +654,7 @@ describe("ApprovalQueueView render", () => {
     }];
     const reviewRuns = [makeRun({ id: "r2", status: "awaiting_human_review" })];
     const { lastFrame } = render(
-      <ApprovalQueueView items={items} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={reviewRuns} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
+      <ApprovalQueueView planRevisionRuns={[]} items={items} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={reviewRuns} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
     );
     expect(lastFrame()!).toContain("2 items");
   });
@@ -660,7 +662,7 @@ describe("ApprovalQueueView render", () => {
   it("shows mode badge for watch runs", () => {
     const reviewRuns = [makeRun({ id: "r2", status: "awaiting_human_review", mode: "watch" })];
     const { lastFrame } = render(
-      <ApprovalQueueView items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={reviewRuns} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
+      <ApprovalQueueView planRevisionRuns={[]} items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={reviewRuns} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
     );
     expect(lastFrame()!).toContain("[W]");
   });
@@ -670,11 +672,11 @@ describe("ApprovalQueueView render", () => {
 
 describe("NewRunDialog render", () => {
   const noop = () => {};
-  const baseForm = { sourceType: "issue" as const, sourceId: "", mode: "assisted" as const, profile: "", runner: "", model: "" };
+  const baseForm = { sourceType: "issue" as const, sourceId: "", mode: "assisted" as const, profile: "", runner: "", model: "", gateStrictness: "normal" as const, priority: "normal" as const };
 
   it("renders source type options", () => {
     const { lastFrame } = render(
-      <NewRunDialog form={baseForm} profiles={[]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onSubmit={noop} onCancel={noop} />,
+      <NewRunDialog form={baseForm} profiles={[]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onChangeGateStrictness={noop} onChangePriority={noop} onSubmit={noop} onCancel={noop} />,
     );
     const frame = lastFrame()!;
     expect(frame).toContain("Issue");
@@ -683,7 +685,7 @@ describe("NewRunDialog render", () => {
 
   it("renders mode options including autopilot-once", () => {
     const { lastFrame } = render(
-      <NewRunDialog form={baseForm} profiles={[]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onSubmit={noop} onCancel={noop} />,
+      <NewRunDialog form={baseForm} profiles={[]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onChangeGateStrictness={noop} onChangePriority={noop} onSubmit={noop} onCancel={noop} />,
     );
     const frame = lastFrame()!;
     expect(frame).toContain("Assisted");
@@ -693,7 +695,7 @@ describe("NewRunDialog render", () => {
 
   it("shows profiles when available", () => {
     const { lastFrame } = render(
-      <NewRunDialog form={baseForm} profiles={["fast", "strong"]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onSubmit={noop} onCancel={noop} />,
+      <NewRunDialog form={baseForm} profiles={["fast", "strong"]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onChangeGateStrictness={noop} onChangePriority={noop} onSubmit={noop} onCancel={noop} />,
     );
     const frame = lastFrame()!;
     expect(frame).toContain("fast");
@@ -703,7 +705,7 @@ describe("NewRunDialog render", () => {
 
   it("shows runner selection when multiple runners", () => {
     const { lastFrame } = render(
-      <NewRunDialog form={baseForm} profiles={[]} runners={["devagent", "claude"]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onSubmit={noop} onCancel={noop} />,
+      <NewRunDialog form={baseForm} profiles={[]} runners={["devagent", "claude"]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onChangeGateStrictness={noop} onChangePriority={noop} onSubmit={noop} onCancel={noop} />,
     );
     const frame = lastFrame()!;
     expect(frame).toContain("Runner");
@@ -713,14 +715,14 @@ describe("NewRunDialog render", () => {
 
   it("hides runner selection with single runner", () => {
     const { lastFrame } = render(
-      <NewRunDialog form={baseForm} profiles={[]} runners={["devagent"]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onSubmit={noop} onCancel={noop} />,
+      <NewRunDialog form={baseForm} profiles={[]} runners={["devagent"]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onChangeGateStrictness={noop} onChangePriority={noop} onSubmit={noop} onCancel={noop} />,
     );
     expect(lastFrame()!).not.toContain("Runner");
   });
 
   it("shows model override field", () => {
     const { lastFrame } = render(
-      <NewRunDialog form={baseForm} profiles={[]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onSubmit={noop} onCancel={noop} />,
+      <NewRunDialog form={baseForm} profiles={[]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onChangeGateStrictness={noop} onChangePriority={noop} onSubmit={noop} onCancel={noop} />,
     );
     expect(lastFrame()!).toContain("Model");
   });
@@ -752,8 +754,8 @@ describe("RunnersView render", () => {
 
   it("renders live runners when provided", () => {
     const infos: RunnerInfo[] = [
-      { bin: "claude", version: "2.1", supportedPhases: ["triage", "plan"], availableProviders: ["anthropic"], supportedApprovalModes: ["full-auto"], healthy: true },
-      { bin: "devagent", version: null, supportedPhases: [], availableProviders: [], supportedApprovalModes: [], healthy: false },
+      { bin: "claude", version: "2.1", supportedPhases: ["triage", "plan"], availableProviders: ["anthropic"], supportedApprovalModes: ["full-auto"], mcpServers: [], tools: [], healthy: true },
+      { bin: "devagent", version: null, supportedPhases: [], availableProviders: [], supportedApprovalModes: [], mcpServers: [], tools: [], healthy: false },
     ];
     const { lastFrame } = render(
       <RunnersView config={config} runnerInfos={infos} height={30} />,
@@ -787,5 +789,110 @@ describe("RunnersView render", () => {
     const frame = lastFrame()!;
     expect(frame).toContain("fail");
     expect(frame).toContain("33%");
+  });
+});
+
+// ─── Gap coverage tests ─────────────────────────────────────
+
+describe("resolveInboxItem with planRevisionRuns", () => {
+  const approvalItems = [
+    { approval: { id: "a1", workflowRunId: "r1", phase: "plan", action: null, summary: "", reviewerComment: null, resolvedAt: null, createdAt: new Date().toISOString(), severity: null, recommendedAction: null, requestedBy: null, reviewerRunId: null } as ApprovalRequest, run: makeRun({ id: "r1" }) },
+  ];
+  const planRevision = [makeRun({ id: "r-rev", status: "plan_revision" as any })];
+
+  it("resolves plan_revision item after approvals", () => {
+    const item = resolveInboxItem(approvalItems, planRevision, [], [], [], [], 1);
+    expect(item?.kind).toBe("plan_revision");
+    expect(item?.run?.id).toBe("r-rev");
+  });
+
+  it("shifts subsequent section indexes", () => {
+    const awaitingReview = [makeRun({ id: "r2", status: "awaiting_human_review" })];
+    const item = resolveInboxItem(approvalItems, planRevision, awaitingReview, [], [], [], 2);
+    expect(item?.kind).toBe("awaiting_review");
+    expect(item?.run?.id).toBe("r2");
+  });
+});
+
+describe("ApprovalQueueView plan revision section", () => {
+  it("renders Pending Reworks section", () => {
+    const revisionRuns = [makeRun({ id: "r-rev", status: "plan_revision" as any })];
+    const { lastFrame } = render(
+      <ApprovalQueueView planRevisionRuns={revisionRuns} items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={[]} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Pending Reworks");
+    expect(frame).toContain("#42");
+  });
+
+  it("shows near-merge summary when PRs exist", () => {
+    const reviewRuns = [makeRun({ id: "r2", status: "awaiting_human_review", prUrl: "https://github.com/test/repo/pull/10" })];
+    const { lastFrame } = render(
+      <ApprovalQueueView planRevisionRuns={[]} items={[]} escalatedRuns={[]} failedRuns={[]} awaitingReviewRuns={reviewRuns} readyToMergeRuns={[]} selectedIndex={0} height={20} />,
+    );
+    expect(lastFrame()!).toContain("Near-Merge PRs: 1");
+  });
+});
+
+describe("NewRunDialog gate strictness and priority", () => {
+  const noop = () => {};
+  const form = { sourceType: "issue" as const, sourceId: "", mode: "assisted" as const, profile: "", runner: "", model: "", gateStrictness: "normal" as const, priority: "normal" as const };
+
+  it("renders gate strictness options", () => {
+    const { lastFrame } = render(
+      <NewRunDialog form={form} profiles={[]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onChangeGateStrictness={noop} onChangePriority={noop} onSubmit={noop} onCancel={noop} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Gate:");
+    expect(frame).toContain("normal");
+    expect(frame).toContain("strict");
+    expect(frame).toContain("lenient");
+  });
+
+  it("renders priority options", () => {
+    const { lastFrame } = render(
+      <NewRunDialog form={form} profiles={[]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onChangeGateStrictness={noop} onChangePriority={noop} onSubmit={noop} onCancel={noop} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Priority:");
+    expect(frame).toContain("high");
+    expect(frame).toContain("urgent");
+  });
+});
+
+describe("context footer rerun reviewer hint", () => {
+  it("shows rerun reviewer for awaiting_human_review on approvals screen", () => {
+    const { lastFrame } = render(
+      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="awaiting_human_review" />,
+    );
+    expect(lastFrame()!).toContain("rerun review");
+  });
+});
+
+describe("context footer jump hints on run screen", () => {
+  it("shows jump hints for run screen", () => {
+    const { lastFrame } = render(
+      <ContextFooter screen="run" dialog={null} inputMode={false} runStatus="implementing" hasActiveProcess={false} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("ga");
+    expect(frame).toContain("gg");
+    expect(frame).toContain("ge");
+  });
+});
+
+describe("RunnersView MCP and tools display", () => {
+  it("shows MCP servers and tools when present", () => {
+    const infos: RunnerInfo[] = [
+      { bin: "claude", version: "2.1", supportedPhases: ["triage"], availableProviders: ["anthropic"], supportedApprovalModes: [], mcpServers: ["filesystem", "github"], tools: ["bash", "edit"], healthy: true },
+    ];
+    const { lastFrame } = render(
+      <RunnersView config={defaultConfig()} runnerInfos={infos} height={30} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("mcp:");
+    expect(frame).toContain("filesystem");
+    expect(frame).toContain("tools:");
+    expect(frame).toContain("bash");
   });
 });

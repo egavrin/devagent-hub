@@ -151,4 +151,6 @@ export interface RunnerDescription {
   availableProviders: string[];
   supportedApprovalModes: string[];
   supportedReasoningLevels: string[];
+  mcpServers?: string[];
+  tools?: string[];
 }

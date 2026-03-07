@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import TextInput from "ink-text-input";
-import type { NewRunForm, NewRunSourceType, NewRunMode } from "../state.js";
+import type { NewRunForm, NewRunSourceType, NewRunMode, GateStrictness, RunPriority } from "../state.js";
 
 interface NewRunDialogProps {
   form: NewRunForm;
@@ -13,6 +13,8 @@ interface NewRunDialogProps {
   onChangeProfile: (p: string) => void;
   onChangeRunner: (r: string) => void;
   onChangeModel: (m: string) => void;
+  onChangeGateStrictness: (g: GateStrictness) => void;
+  onChangePriority: (p: RunPriority) => void;
   onSubmit: () => void;
   onCancel: () => void;
 }
@@ -27,6 +29,8 @@ export function NewRunDialog({
   onChangeProfile,
   onChangeRunner,
   onChangeModel,
+  onChangeGateStrictness,
+  onChangePriority,
   onSubmit,
   onCancel,
 }: NewRunDialogProps) {
@@ -157,6 +161,36 @@ export function NewRunDialog({
       <Box marginTop={1}>
         <Text>Model: </Text>
         <Text dimColor>{form.model || "(from profile)"}</Text>
+      </Box>
+
+      {/* Gate strictness */}
+      <Box marginTop={1} gap={1}>
+        <Text>Gate:</Text>
+        {(["normal", "strict", "lenient"] as const).map((g) => (
+          <Text
+            key={g}
+            bold={form.gateStrictness === g}
+            color={form.gateStrictness === g ? "yellow" : "gray"}
+            underline={form.gateStrictness === g}
+          >
+            {g}
+          </Text>
+        ))}
+      </Box>
+
+      {/* Priority */}
+      <Box marginTop={1} gap={1}>
+        <Text>Priority:</Text>
+        {(["normal", "high", "urgent"] as const).map((p) => (
+          <Text
+            key={p}
+            bold={form.priority === p}
+            color={form.priority === p ? (p === "urgent" ? "red" : p === "high" ? "yellow" : "cyan") : "gray"}
+            underline={form.priority === p}
+          >
+            {p}
+          </Text>
+        ))}
       </Box>
 
       <Box marginTop={1}>

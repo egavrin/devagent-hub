@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { existsSync, openSync, readSync, closeSync, watchFile, unwatchFile, statSync } from "fs";
 
+export type BookmarkType = "phase_start" | "tool_error" | "gate_verdict" | "pr_open" | "ci_fail";
+
 export interface LogEntry {
   timestamp: string;
   text: string;
+  bookmark?: BookmarkType;
 }
 
 export function useEventLog(
@@ -73,7 +76,11 @@ export function useEventLog(
 
           switch (type) {
             case "iteration:start":
-              newEntries.push({ timestamp: ts, text: `── iteration ${ev.iteration} ──` });
+              newEntries.push({
+                timestamp: ts,
+                text: `── iteration ${ev.iteration} ──`,
+                bookmark: ev.iteration === 1 ? "phase_start" : undefined,
+              });
               break;
             case "tool:before":
               newEntries.push({ timestamp: ts, text: `▶ ${ev.name}` });
@@ -82,7 +89,17 @@ export function useEventLog(
               newEntries.push({ timestamp: ts, text: `✓ ${ev.name}` });
               break;
             case "tool:error":
-              newEntries.push({ timestamp: ts, text: `✗ ${ev.name}: ${ev.error ?? "error"}` });
+              newEntries.push({ timestamp: ts, text: `✗ ${ev.name}: ${ev.error ?? "error"}`, bookmark: "tool_error" });
+              break;
+            case "gate:verdict":
+              newEntries.push({ timestamp: ts, text: `[gate:verdict] ${ev.action ?? ""}`, bookmark: "gate_verdict" });
+              break;
+            case "pr:opened":
+              newEntries.push({ timestamp: ts, text: `[pr:opened] ${ev.url ?? ""}`, bookmark: "pr_open" });
+              break;
+            case "ci:fail":
+            case "verify:fail":
+              newEntries.push({ timestamp: ts, text: `[${type}] ${ev.message ?? ev.error ?? ""}`, bookmark: "ci_fail" });
               break;
             case "iteration:end":
               break;

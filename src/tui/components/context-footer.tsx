@@ -66,6 +66,7 @@ function approvalHints(runStatus?: string | null): HintEntry[] {
   } else if (runStatus === "awaiting_human_review") {
     hints.push({ key: "A", label: "approve review" });
     hints.push({ key: "C", label: "mark reviewed" });
+    hints.push({ key: "r", label: "rerun reviewer" });
     hints.push({ key: "O", label: "open PR" });
   } else if (runStatus === "ready_to_merge") {
     hints.push({ key: "A", label: "mark done" });
@@ -122,6 +123,9 @@ function runHints(status: string | null, hasActiveProcess: boolean): HintEntry[]
   }
   hints.push({ key: "F", label: "diff" });
   hints.push({ key: "O", label: "open PR" });
+  hints.push({ key: "ga", label: "artifact" });
+  hints.push({ key: "gg", label: "gate" });
+  hints.push({ key: "ge", label: "error" });
   hints.push({ key: "Q", label: "quit" });
   return hints;
 }

@@ -36,6 +36,9 @@ export interface KeybindingActions {
   onEscalate: () => void;
   onSettingsView: () => void;
   onRerunWithProfile: () => void;
+  onJumpArtifact: () => void;
+  onJumpGate: () => void;
+  onJumpError: () => void;
 }
 
 export function useKeybindings(
@@ -116,14 +119,33 @@ export function useKeybindings(
     // G → go to bottom
     if (input === "G") actions.onGoBottom();
 
-    // gg → go to top (track last key with 300ms timeout)
+    // g-prefix commands (300ms timeout):
+    // gg = go top, ga = jump artifact, ge = jump error
+    // On run screen: gg = jump gate (instead of go-top which doesn't apply)
     const now = Date.now();
-    if (input === "g" && !key.shift) {
-      if (lastKeyRef.current.key === "g" && now - lastKeyRef.current.time < 300) {
-        actions.onGoTop();
+    if (lastKeyRef.current.key === "g" && now - lastKeyRef.current.time < 300) {
+      if (input === "g") {
+        if (screen === "run") {
+          actions.onJumpGate();
+        } else {
+          actions.onGoTop();
+        }
         lastKeyRef.current = { key: "", time: 0 };
         return;
       }
+      if (input === "a") {
+        actions.onJumpArtifact();
+        lastKeyRef.current = { key: "", time: 0 };
+        return;
+      }
+      if (input === "e") {
+        actions.onJumpError();
+        lastKeyRef.current = { key: "", time: 0 };
+        return;
+      }
+      // Not a valid g-sequence, fall through
+      lastKeyRef.current = { key: input, time: now };
+    } else if (input === "g" && !key.shift) {
       lastKeyRef.current = { key: "g", time: now };
     } else {
       lastKeyRef.current = { key: input, time: now };

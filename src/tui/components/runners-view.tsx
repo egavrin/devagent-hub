@@ -11,6 +11,8 @@ export interface RunnerInfo {
   supportedPhases: string[];
   availableProviders: string[];
   supportedApprovalModes: string[];
+  mcpServers: string[];
+  tools: string[];
   healthy: boolean;
 }
 
@@ -103,6 +105,18 @@ export function RunnersView({ config, runs = [], agentRuns = [], runnerInfos = [
                   <>
                     <Text dimColor>  approval: </Text>
                     <Text>{info.supportedApprovalModes.join(", ")}</Text>
+                  </>
+                )}
+                {info.mcpServers.length > 0 && (
+                  <>
+                    <Text dimColor>  mcp: </Text>
+                    <Text>[{info.mcpServers.join(", ")}]</Text>
+                  </>
+                )}
+                {info.tools.length > 0 && (
+                  <>
+                    <Text dimColor>  tools: </Text>
+                    <Text>[{info.tools.join(", ")}]</Text>
                   </>
                 )}
               </Box>

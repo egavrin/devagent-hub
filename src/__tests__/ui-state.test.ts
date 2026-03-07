@@ -100,11 +100,11 @@ describe("uiReducer", () => {
     it("OPEN_DIALOG new-run resets form", () => {
       const withData = {
         ...initialUIState,
-        newRunForm: { sourceType: "pr" as const, sourceId: "42", mode: "watch" as const, profile: "fast", runner: "claude", model: "sonnet" },
+        newRunForm: { sourceType: "pr" as const, sourceId: "42", mode: "watch" as const, profile: "fast", runner: "claude", model: "sonnet", gateStrictness: "normal" as const, priority: "normal" as const },
       };
       const s = dispatch(withData, { type: "OPEN_DIALOG", dialog: "new-run" });
       expect(s.dialog).toBe("new-run");
-      expect(s.newRunForm).toEqual({ sourceType: "issue", sourceId: "", mode: "assisted", profile: "", runner: "", model: "" });
+      expect(s.newRunForm).toEqual({ sourceType: "issue", sourceId: "", mode: "assisted", profile: "", runner: "", model: "", gateStrictness: "normal", priority: "normal" });
     });
 
     it("OPEN_DIALOG rework resets note", () => {
@@ -178,13 +178,13 @@ describe("uiReducer", () => {
         { type: "SET_NEW_RUN_SOURCE_ID", value: "99" },
         { type: "SET_NEW_RUN_MODE", mode: "watch" },
       );
-      expect(s.newRunForm).toEqual({ sourceType: "pr", sourceId: "99", mode: "watch", profile: "", runner: "", model: "" });
+      expect(s.newRunForm).toEqual({ sourceType: "pr", sourceId: "99", mode: "watch", profile: "", runner: "", model: "", gateStrictness: "normal", priority: "normal" });
     });
 
     it("OPEN_DIALOG new-run resets runner and model", () => {
       const withData = {
         ...initialUIState,
-        newRunForm: { sourceType: "pr" as const, sourceId: "42", mode: "watch" as const, profile: "fast", runner: "claude", model: "opus" },
+        newRunForm: { sourceType: "pr" as const, sourceId: "42", mode: "watch" as const, profile: "fast", runner: "claude", model: "opus", gateStrictness: "strict" as const, priority: "high" as const },
       };
       const s = dispatch(withData, { type: "OPEN_DIALOG", dialog: "new-run" });
       expect(s.newRunForm.runner).toBe("");
@@ -371,7 +371,7 @@ describe("uiReducer", () => {
         { type: "SET_NEW_RUN_SOURCE_ID", value: "42" },
         { type: "SET_NEW_RUN_MODE", mode: "watch" },
       );
-      expect(s.newRunForm).toEqual({ sourceType: "pr", sourceId: "42", mode: "watch", profile: "", runner: "", model: "" });
+      expect(s.newRunForm).toEqual({ sourceType: "pr", sourceId: "42", mode: "watch", profile: "", runner: "", model: "", gateStrictness: "normal", priority: "normal" });
 
       // Cancel — Esc (BACK)
       s = dispatch(s, { type: "BACK" });
@@ -411,6 +411,66 @@ describe("uiReducer", () => {
       expect(s.showArtifactDiff).toBe(false); // reset
       // logMode persists — it's a user preference, not per-run
       expect(s.logMode).toBe("raw");
+    });
+  });
+
+  // ─── Gate strictness and priority ──────────────────────────
+
+  describe("gate strictness and priority", () => {
+    it("SET_NEW_RUN_GATE_STRICTNESS changes gate strictness", () => {
+      const s = dispatch(initialUIState, { type: "SET_NEW_RUN_GATE_STRICTNESS", gateStrictness: "strict" });
+      expect(s.newRunForm.gateStrictness).toBe("strict");
+    });
+
+    it("SET_NEW_RUN_PRIORITY changes priority", () => {
+      const s = dispatch(initialUIState, { type: "SET_NEW_RUN_PRIORITY", priority: "urgent" });
+      expect(s.newRunForm.priority).toBe("urgent");
+    });
+
+    it("OPEN_DIALOG new-run resets gate strictness and priority", () => {
+      const withData = {
+        ...initialUIState,
+        newRunForm: { ...initialUIState.newRunForm, gateStrictness: "strict" as const, priority: "high" as const },
+      };
+      const s = dispatch(withData, { type: "OPEN_DIALOG", dialog: "new-run" });
+      expect(s.newRunForm.gateStrictness).toBe("normal");
+      expect(s.newRunForm.priority).toBe("normal");
+    });
+  });
+
+  // ─── Jump targets ──────────────────────────────────────────
+
+  describe("jump targets", () => {
+    it("JUMP_TO sets target and switches pane", () => {
+      const s = dispatch(initialUIState, { type: "JUMP_TO", target: "latest_artifact" });
+      expect(s.jumpTarget).toBe("latest_artifact");
+      expect(s.focusedPane).toBe("artifact");
+    });
+
+    it("JUMP_TO latest_gate switches to timeline", () => {
+      const s = dispatch(initialUIState, { type: "JUMP_TO", target: "latest_gate" });
+      expect(s.jumpTarget).toBe("latest_gate");
+      expect(s.focusedPane).toBe("timeline");
+    });
+
+    it("JUMP_TO last_error switches to timeline", () => {
+      const s = dispatch(initialUIState, { type: "JUMP_TO", target: "last_error" });
+      expect(s.jumpTarget).toBe("last_error");
+      expect(s.focusedPane).toBe("timeline");
+    });
+
+    it("CLEAR_JUMP clears both jump and scroll", () => {
+      const withJump = dispatch(initialUIState, { type: "JUMP_TO", target: "latest_gate" });
+      const s = dispatch(withJump, { type: "CLEAR_JUMP" });
+      expect(s.jumpTarget).toBeNull();
+      expect(s.scrollToAgentRunId).toBeNull();
+    });
+
+    it("JUMP_TO_AGENT_RUN sets scroll target and timeline pane", () => {
+      const s = dispatch(initialUIState, { type: "JUMP_TO_AGENT_RUN", agentRunId: "ar-123" });
+      expect(s.scrollToAgentRunId).toBe("ar-123");
+      expect(s.focusedPane).toBe("timeline");
+      expect(s.jumpTarget).toBeNull();
     });
   });
 

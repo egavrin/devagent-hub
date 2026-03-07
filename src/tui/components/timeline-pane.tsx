@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { AgentRun, StatusTransition, Artifact } from "../../state/types.js";
+import type { JumpTarget } from "../state.js";
 
 interface TimelinePaneProps {
   agentRuns: AgentRun[];
@@ -8,6 +9,8 @@ interface TimelinePaneProps {
   artifacts: Artifact[];
   isFocused: boolean;
   height: number;
+  jumpTarget?: JumpTarget | null;
+  scrollToAgentRunId?: string | null;
 }
 
 function formatDuration(start: string, end: string | null): string {
@@ -20,14 +23,26 @@ function formatDuration(start: string, end: string | null): string {
   return `${Math.floor(ms / 3600_000)}h${Math.floor((ms % 3600_000) / 60_000)}m`;
 }
 
+type BookmarkKind = "phase_start" | "gate_verdict" | "error" | "pr_open" | "ci_fail";
+
 interface TimelineEntry {
   time: string;
   node: React.ReactNode;
   sortKey: string;
   groupKey?: string; // used to group consecutive tool events for collapsing
+  bookmark?: BookmarkKind;
+  agentRunId?: string; // for artifact-to-log linking
 }
 
-export function TimelinePane({ agentRuns, transitions, artifacts, isFocused, height }: TimelinePaneProps) {
+const BOOKMARK_INDICATORS: Record<BookmarkKind, { symbol: string; color: string }> = {
+  phase_start: { symbol: "[P]", color: "blue" },
+  gate_verdict: { symbol: "[G]", color: "green" },
+  error: { symbol: "[!]", color: "red" },
+  pr_open: { symbol: "[PR]", color: "cyan" },
+  ci_fail: { symbol: "[CI]", color: "red" },
+};
+
+export function TimelinePane({ agentRuns, transitions, artifacts, isFocused, height, jumpTarget, scrollToAgentRunId }: TimelinePaneProps) {
   const entries: TimelineEntry[] = [];
 
   // Agent runs as timeline entries
@@ -39,10 +54,14 @@ export function TimelinePane({ agentRuns, transitions, artifacts, isFocused, hei
     const kindBadge = ar.executorKind ? ` [${ar.executorKind}]` : "";
     const profileBadge = ar.profile ? ` @${ar.profile}` : "";
 
+    const arBookmark: BookmarkKind | undefined = ar.status === "failed" ? "error" : undefined;
+
     entries.push({
       time: ar.startedAt.slice(11, 19),
       sortKey: ar.startedAt,
       groupKey: `agent:${ar.phase}:${ar.workflowRunId}`,
+      bookmark: arBookmark,
+      agentRunId: ar.id,
       node: (
         <Text>
           <Text color={statusColor}>{statusMark}</Text>
@@ -99,6 +118,7 @@ export function TimelinePane({ agentRuns, transitions, artifacts, isFocused, hei
     entries.push({
       time: g.createdAt.slice(11, 19),
       sortKey: g.createdAt,
+      bookmark: "gate_verdict",
       node: (
         <Text>
           <Text color={color}>{icon} gate:{g.phase}</Text>
@@ -158,7 +178,34 @@ export function TimelinePane({ agentRuns, transitions, artifacts, isFocused, hei
     i = j;
   }
 
-  const visible = collapsed.slice(-(height - 3));
+  // Compute jump target index for scrolling
+  let jumpIndex = -1;
+  if (jumpTarget === "latest_gate") {
+    for (let k = collapsed.length - 1; k >= 0; k--) {
+      if (collapsed[k].bookmark === "gate_verdict") { jumpIndex = k; break; }
+    }
+  } else if (jumpTarget === "last_error") {
+    for (let k = collapsed.length - 1; k >= 0; k--) {
+      if (collapsed[k].bookmark === "error" || collapsed[k].bookmark === "ci_fail") { jumpIndex = k; break; }
+    }
+  }
+  if (scrollToAgentRunId) {
+    for (let k = collapsed.length - 1; k >= 0; k--) {
+      if (collapsed[k].agentRunId === scrollToAgentRunId) { jumpIndex = k; break; }
+    }
+  }
+
+  const viewSize = height - 3;
+  let visible: TimelineEntry[];
+  let highlightOffset = -1;
+  if (jumpIndex >= 0) {
+    // Center the jumped-to entry in the visible window
+    const start = Math.max(0, Math.min(jumpIndex - Math.floor(viewSize / 2), collapsed.length - viewSize));
+    visible = collapsed.slice(start, start + viewSize);
+    highlightOffset = jumpIndex - start;
+  } else {
+    visible = collapsed.slice(-viewSize);
+  }
 
   return (
     <Box
@@ -173,12 +220,18 @@ export function TimelinePane({ agentRuns, transitions, artifacts, isFocused, hei
       {visible.length === 0 ? (
         <Text dimColor>No activity yet</Text>
       ) : (
-        visible.map((e, i) => (
-          <Box key={i}>
-            <Text dimColor>{e.time} </Text>
-            {e.node}
-          </Box>
-        ))
+        visible.map((e, idx) => {
+          const bm = e.bookmark ? BOOKMARK_INDICATORS[e.bookmark] : null;
+          const isHighlighted = idx === highlightOffset;
+          return (
+            <Box key={idx}>
+              {bm ? <Text color={bm.color}>{bm.symbol} </Text> : null}
+              <Text dimColor>{e.time} </Text>
+              <Text inverse={isHighlighted}>{isHighlighted ? "" : ""}</Text>
+              {e.node}
+            </Box>
+          );
+        })
       )}
     </Box>
   );
