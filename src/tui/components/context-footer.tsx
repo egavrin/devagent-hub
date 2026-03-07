@@ -54,17 +54,34 @@ function settingsHints(): HintEntry[] {
   ];
 }
 
-function approvalHints(): HintEntry[] {
-  return [
+function approvalHints(runStatus?: string | null): HintEntry[] {
+  const hints: HintEntry[] = [
     { key: "j/k", label: "nav" },
     { key: "Enter", label: "open run" },
-    { key: "A", label: "approve" },
-    { key: "W", label: "rework" },
-    { key: "O", label: "open PR" },
-    { key: "C", label: "done" },
-    { key: "Esc", label: "back" },
-    { key: "Q", label: "quit" },
   ];
+
+  if (runStatus === "plan_draft" || runStatus === "plan_revision") {
+    hints.push({ key: "A", label: "approve plan" });
+    hints.push({ key: "W", label: "rework" });
+  } else if (runStatus === "awaiting_human_review") {
+    hints.push({ key: "A", label: "approve review" });
+    hints.push({ key: "C", label: "mark reviewed" });
+    hints.push({ key: "O", label: "open PR" });
+  } else if (runStatus === "ready_to_merge") {
+    hints.push({ key: "A", label: "mark done" });
+    hints.push({ key: "O", label: "open PR" });
+  } else if (runStatus === "failed") {
+    hints.push({ key: "r", label: "retry" });
+  } else if (runStatus === "escalated") {
+    hints.push({ key: "T", label: "take-over" });
+  } else {
+    hints.push({ key: "A", label: "approve" });
+    hints.push({ key: "W", label: "rework" });
+  }
+
+  hints.push({ key: "Esc", label: "back" });
+  hints.push({ key: "Q", label: "quit" });
+  return hints;
 }
 
 function runHints(status: string | null, hasActiveProcess: boolean): HintEntry[] {
@@ -86,6 +103,7 @@ function runHints(status: string | null, hasActiveProcess: boolean): HintEntry[]
   const continuable = [
     "new", "triaged", "plan_draft", "plan_revision", "plan_accepted",
     "awaiting_local_verify", "draft_pr_opened", "auto_review_fix_loop",
+    "awaiting_human_review", "ready_to_merge",
   ];
   if (status && continuable.includes(status)) {
     hints.push({ key: "C", label: "continue" });
@@ -115,7 +133,7 @@ export function ContextFooter({ screen, dialog, inputMode, runStatus, hasActiveP
 
   let hints: HintEntry[];
   if (screen === "approvals") {
-    hints = approvalHints();
+    hints = approvalHints(runStatus);
   } else if (screen === "run") {
     hints = runHints(runStatus ?? null, hasActiveProcess);
   } else if (screen === "runners") {

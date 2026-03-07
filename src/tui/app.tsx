@@ -20,7 +20,7 @@ import { LogPane } from "./components/log-pane.js";
 import { ContextFooter } from "./components/context-footer.js";
 import { NewRunDialog } from "./components/new-run-dialog.js";
 import { ReworkDialog } from "./components/rework-dialog.js";
-import { ApprovalQueueView } from "./components/approval-queue-view.js";
+import { ApprovalQueueView, resolveInboxItem } from "./components/approval-queue-view.js";
 import type { ApprovalQueueItem } from "./components/approval-queue-view.js";
 import { WhyPausedPanel } from "./components/why-paused-panel.js";
 import { AutopilotBar } from "./components/autopilot-bar.js";
@@ -99,7 +99,8 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
     approval: a,
     run: store.getWorkflowRun(a.workflowRunId),
   }));
-  const blockedRuns = runs.filter((r) => r.status === "failed" || r.status === "escalated");
+  const escalatedRuns = runs.filter((r) => r.status === "escalated");
+  const failedRuns = runs.filter((r) => r.status === "failed");
   const awaitingReviewRuns = runs.filter((r) => r.status === "awaiting_human_review");
   const readyToMergeRuns = runs.filter((r) => r.status === "ready_to_merge");
 
@@ -151,12 +152,19 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
 
   const handleNavigate = useCallback((direction: "up" | "down" | "left" | "right") => {
     if (ui.screen === "approvals") {
-      const totalItems = approvalQueueItems.length + awaitingReviewRuns.length + readyToMergeRuns.length + blockedRuns.length;
+      const totalItems = approvalQueueItems.length + awaitingReviewRuns.length + readyToMergeRuns.length + escalatedRuns.length + failedRuns.length;
       if (totalItems === 0) return;
+      let newIndex = ui.approvalIndex;
       if (direction === "up") {
-        dispatch({ type: "SET_APPROVAL_INDEX", index: Math.max(0, ui.approvalIndex - 1) });
+        newIndex = Math.max(0, ui.approvalIndex - 1);
       } else if (direction === "down") {
-        dispatch({ type: "SET_APPROVAL_INDEX", index: Math.min(totalItems - 1, ui.approvalIndex + 1) });
+        newIndex = Math.min(totalItems - 1, ui.approvalIndex + 1);
+      }
+      dispatch({ type: "SET_APPROVAL_INDEX", index: newIndex });
+      // Sync selectedRunId so action handlers target the right run
+      const item = resolveInboxItem(approvalQueueItems, awaitingReviewRuns, readyToMergeRuns, escalatedRuns, failedRuns, newIndex);
+      if (item?.run) {
+        dispatch({ type: "SELECT_RUN", runId: item.run.id });
       }
       return;
     }
@@ -186,7 +194,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
     if (colRuns[newRow]) {
       dispatch({ type: "SELECT_RUN", runId: colRuns[newRow].id });
     }
-  }, [ui.screen, ui.focusedColumnIndex, ui.focusedRowIndex, ui.approvalIndex, getColumnRuns, approvalQueueItems.length, blockedRuns.length]);
+  }, [ui.screen, ui.focusedColumnIndex, ui.focusedRowIndex, ui.approvalIndex, getColumnRuns, approvalQueueItems, awaitingReviewRuns, readyToMergeRuns, escalatedRuns, failedRuns]);
 
   const handleSelect = useCallback(() => {
     if (ui.screen === "dashboard") {
@@ -196,45 +204,25 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
         dispatch({ type: "OPEN_RUN", runId: run.id });
       }
     } else if (ui.screen === "approvals") {
-      // Open the run for the selected approval
-      let idx = ui.approvalIndex;
-      if (idx < approvalQueueItems.length) {
-        const item = approvalQueueItems[idx];
-        if (item.run) {
-          dispatch({ type: "OPEN_RUN", runId: item.run.id });
-        }
-      } else {
-        idx -= approvalQueueItems.length;
-        if (idx < awaitingReviewRuns.length) {
-          dispatch({ type: "OPEN_RUN", runId: awaitingReviewRuns[idx].id });
-        } else {
-          idx -= awaitingReviewRuns.length;
-          if (idx < readyToMergeRuns.length) {
-            dispatch({ type: "OPEN_RUN", runId: readyToMergeRuns[idx].id });
-          } else {
-            idx -= readyToMergeRuns.length;
-            const run = blockedRuns[idx];
-            if (run) {
-              dispatch({ type: "OPEN_RUN", runId: run.id });
-            }
-          }
-        }
+      const item = resolveInboxItem(approvalQueueItems, awaitingReviewRuns, readyToMergeRuns, escalatedRuns, failedRuns, ui.approvalIndex);
+      if (item?.run) {
+        dispatch({ type: "OPEN_RUN", runId: item.run.id });
       }
     }
-  }, [ui.screen, ui.focusedColumnIndex, ui.focusedRowIndex, ui.approvalIndex, getColumnRuns, approvalQueueItems, awaitingReviewRuns, readyToMergeRuns, blockedRuns]);
+  }, [ui.screen, ui.focusedColumnIndex, ui.focusedRowIndex, ui.approvalIndex, getColumnRuns, approvalQueueItems, awaitingReviewRuns, readyToMergeRuns, escalatedRuns, failedRuns]);
 
   // ─── Run actions ─────────────────────────────────────────────
 
   const getApprovalTarget = useCallback((): { issueNumber: number; runId: string } | null => {
-    // In approvals screen, use the selected approval's run
-    if (ui.screen === "approvals" && ui.approvalIndex < approvalQueueItems.length) {
-      const item = approvalQueueItems[ui.approvalIndex];
-      if (item.run) return { issueNumber: item.run.issueNumber, runId: item.run.id };
+    // In approvals screen, resolve the focused item from any section
+    if (ui.screen === "approvals") {
+      const item = resolveInboxItem(approvalQueueItems, awaitingReviewRuns, readyToMergeRuns, escalatedRuns, failedRuns, ui.approvalIndex);
+      if (item?.run) return { issueNumber: item.run.issueNumber, runId: item.run.id };
     }
     // Otherwise use selected run
     if (selectedRun) return { issueNumber: selectedRun.issueNumber, runId: selectedRun.id };
     return null;
-  }, [ui.screen, ui.approvalIndex, approvalQueueItems, selectedRun]);
+  }, [ui.screen, ui.approvalIndex, approvalQueueItems, awaitingReviewRuns, readyToMergeRuns, escalatedRuns, failedRuns, selectedRun]);
 
   const handleApprove = useCallback(() => {
     const target = getApprovalTarget();
@@ -242,15 +230,21 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
 
     const targetRun = store.getWorkflowRun(target.runId);
     if (!targetRun) return;
-    if (targetRun.status !== "plan_draft" && targetRun.status !== "plan_revision") {
-      showStatus("Can only approve plans in plan_draft/plan_revision status");
-      return;
-    }
 
-    orchestrator.approvePlan(target.issueNumber).then(
-      () => showStatus(`Plan approved for #${target.issueNumber}`),
-      (err: unknown) => showStatus(`Approve failed: ${err instanceof Error ? err.message : String(err)}`),
-    );
+    if (targetRun.status === "plan_draft" || targetRun.status === "plan_revision") {
+      orchestrator.approvePlan(target.issueNumber).then(
+        () => showStatus(`Plan approved for #${target.issueNumber}`),
+        (err: unknown) => showStatus(`Approve failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
+    } else if (targetRun.status === "awaiting_human_review") {
+      store.updateStatus(targetRun.id, "ready_to_merge", "Human review approved via TUI");
+      showStatus(`Review approved for #${target.issueNumber} — ready to merge`);
+    } else if (targetRun.status === "ready_to_merge") {
+      store.updateStatus(targetRun.id, "done", "Marked done via TUI");
+      showStatus(`#${target.issueNumber} marked done`);
+    } else {
+      showStatus(`Cannot approve from "${targetRun.status}" status`);
+    }
   }, [getApprovalTarget, store, orchestrator, showStatus]);
 
   const handleRework = useCallback(() => {
@@ -300,6 +294,13 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
       draft_pr_opened: { label: "Reviewing", fn: () => orchestrator.review(issue) },
       auto_review_fix_loop: { label: "Repairing", fn: () => orchestrator.repair(issue) },
       awaiting_human_review: {
+        label: "Marking reviewed",
+        fn: async () => {
+          store.updateStatus(selectedRun.id, "ready_to_merge", "Marked reviewed via TUI");
+          return store.getWorkflowRun(selectedRun.id);
+        },
+      },
+      ready_to_merge: {
         label: "Marking done",
         fn: async () => {
           store.updateStatus(selectedRun.id, "done", "Marked done via TUI");
@@ -694,7 +695,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
           dispatch({ type: "SELECT_RUN", runId: colRuns[lastIdx].id });
         }
       } else if (ui.screen === "approvals") {
-        const totalItems = approvalQueueItems.length + awaitingReviewRuns.length + readyToMergeRuns.length + blockedRuns.length;
+        const totalItems = approvalQueueItems.length + awaitingReviewRuns.length + readyToMergeRuns.length + escalatedRuns.length + failedRuns.length;
         dispatch({ type: "SET_APPROVAL_INDEX", index: Math.max(0, totalItems - 1) });
       }
     },
@@ -763,7 +764,8 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
         /* ── Approvals screen ─────────────────────────────── */
         <ApprovalQueueView
           items={approvalQueueItems}
-          blockedRuns={blockedRuns}
+          escalatedRuns={escalatedRuns}
+          failedRuns={failedRuns}
           awaitingReviewRuns={awaitingReviewRuns}
           readyToMergeRuns={readyToMergeRuns}
           selectedIndex={ui.approvalIndex}

@@ -7,9 +7,49 @@ interface ApprovalQueueItem {
   run: WorkflowRun | undefined;
 }
 
+export type InboxItemKind = "approval" | "awaiting_review" | "ready_to_merge" | "blocked" | "escalated";
+
+export interface InboxItem {
+  kind: InboxItemKind;
+  run: WorkflowRun | undefined;
+  approval?: ApprovalRequest;
+}
+
+export function resolveInboxItem(
+  items: ApprovalQueueItem[],
+  awaitingReviewRuns: WorkflowRun[],
+  readyToMergeRuns: WorkflowRun[],
+  escalatedRuns: WorkflowRun[],
+  failedRuns: WorkflowRun[],
+  index: number,
+): InboxItem | null {
+  let idx = index;
+  if (idx < items.length) {
+    return { kind: "approval", run: items[idx].run, approval: items[idx].approval };
+  }
+  idx -= items.length;
+  if (idx < awaitingReviewRuns.length) {
+    return { kind: "awaiting_review", run: awaitingReviewRuns[idx] };
+  }
+  idx -= awaitingReviewRuns.length;
+  if (idx < readyToMergeRuns.length) {
+    return { kind: "ready_to_merge", run: readyToMergeRuns[idx] };
+  }
+  idx -= readyToMergeRuns.length;
+  if (idx < escalatedRuns.length) {
+    return { kind: "escalated", run: escalatedRuns[idx] };
+  }
+  idx -= escalatedRuns.length;
+  if (idx < failedRuns.length) {
+    return { kind: "blocked", run: failedRuns[idx] };
+  }
+  return null;
+}
+
 interface ApprovalQueueViewProps {
   items: ApprovalQueueItem[];
-  blockedRuns: WorkflowRun[];
+  escalatedRuns: WorkflowRun[];
+  failedRuns: WorkflowRun[];
   awaitingReviewRuns: WorkflowRun[];
   readyToMergeRuns: WorkflowRun[];
   selectedIndex: number;
@@ -40,14 +80,27 @@ function severityColor(severity: string): string {
   }
 }
 
-export function ApprovalQueueView({ items, blockedRuns, awaitingReviewRuns, readyToMergeRuns, selectedIndex, height }: ApprovalQueueViewProps) {
+function modeBadge(mode: string): React.ReactNode {
+  if (mode === "watch") return <Text color="magenta">[W]</Text>;
+  if (mode === "autopilot") return <Text color="red">[AP]</Text>;
+  return null;
+}
+
+function truncTitle(title: string, max: number): string {
+  return title.length > max ? title.slice(0, max - 1) + "\u2026" : title;
+}
+
+export function ApprovalQueueView({ items, escalatedRuns, failedRuns, awaitingReviewRuns, readyToMergeRuns, selectedIndex, height }: ApprovalQueueViewProps) {
   const allItems: Array<{ key: string; node: React.ReactNode }> = [];
   let selectableIndex = 0;
 
   // Pending approvals section
   if (items.length > 0) {
     allItems.push({ key: "approvals-hdr", node: (
-      <Text bold>Pending Approvals ({items.length})</Text>
+      <Box gap={2}>
+        <Text bold>Pending Approvals ({items.length})</Text>
+        <Text dimColor>A approve  W rework</Text>
+      </Box>
     )});
 
     for (const [, item] of items.entries()) {
@@ -73,7 +126,9 @@ export function ApprovalQueueView({ items, blockedRuns, awaitingReviewRuns, read
             </>
           ) : null}
           {" "}
-          <Text dimColor>{title.length > 30 ? title.slice(0, 29) + "\u2026" : title}</Text>
+          {item.run ? modeBadge(item.run.mode) : null}
+          {" "}
+          <Text dimColor>{truncTitle(title, 30)}</Text>
           {"  "}
           <Text color={ageColor}>{ageStr}</Text>
         </Text>
@@ -86,7 +141,10 @@ export function ApprovalQueueView({ items, blockedRuns, awaitingReviewRuns, read
   if (awaitingReviewRuns.length > 0) {
     allItems.push({ key: "review-sep", node: <Text dimColor>{"\u2500".repeat(50)}</Text> });
     allItems.push({ key: "review-hdr", node: (
-      <Text bold color="cyan">Awaiting Human Review ({awaitingReviewRuns.length})</Text>
+      <Box gap={2}>
+        <Text bold color="cyan">Awaiting Human Review ({awaitingReviewRuns.length})</Text>
+        <Text dimColor>C mark reviewed  r rerun reviewer  O open PR</Text>
+      </Box>
     )});
 
     for (const r of awaitingReviewRuns) {
@@ -98,13 +156,13 @@ export function ApprovalQueueView({ items, blockedRuns, awaitingReviewRuns, read
           {isSelected ? ">" : " "}
           <Text color="cyan"> #{r.issueNumber}</Text>
           {" "}
-          <Text color="cyan">review</Text>
+          {modeBadge(r.mode)}
           {" "}
-          <Text dimColor>{title.length > 30 ? title.slice(0, 29) + "\u2026" : title}</Text>
+          <Text dimColor>{truncTitle(title, 30)}</Text>
           {"  "}
           <Text dimColor>{formatAge(r.updatedAt)}</Text>
           {"  "}
-          <Text dimColor>PR: {r.prUrl ?? "no PR"}</Text>
+          {r.prUrl ? <Text color="cyan">{r.prUrl}</Text> : <Text dimColor>no PR</Text>}
         </Text>
       )});
       selectableIndex++;
@@ -115,7 +173,10 @@ export function ApprovalQueueView({ items, blockedRuns, awaitingReviewRuns, read
   if (readyToMergeRuns.length > 0) {
     allItems.push({ key: "merge-sep", node: <Text dimColor>{"\u2500".repeat(50)}</Text> });
     allItems.push({ key: "merge-hdr", node: (
-      <Text bold color="green">Ready to Merge ({readyToMergeRuns.length})</Text>
+      <Box gap={2}>
+        <Text bold color="green">Ready to Merge ({readyToMergeRuns.length})</Text>
+        <Text dimColor>C mark done  O open PR</Text>
+      </Box>
     )});
 
     for (const r of readyToMergeRuns) {
@@ -127,38 +188,73 @@ export function ApprovalQueueView({ items, blockedRuns, awaitingReviewRuns, read
           {isSelected ? ">" : " "}
           <Text color="green"> #{r.issueNumber}</Text>
           {" "}
-          <Text color="green">merge</Text>
+          {modeBadge(r.mode)}
           {" "}
-          <Text dimColor>{title.length > 30 ? title.slice(0, 29) + "\u2026" : title}</Text>
+          <Text dimColor>{truncTitle(title, 30)}</Text>
           {"  "}
           <Text dimColor>{formatAge(r.updatedAt)}</Text>
+          {"  "}
+          {r.prUrl ? <Text color="cyan">{r.prUrl}</Text> : null}
         </Text>
       )});
       selectableIndex++;
     }
   }
 
-  // Blocked / escalated runs section
-  if (blockedRuns.length > 0) {
-    allItems.push({ key: "blocked-sep", node: <Text dimColor>{"\u2500".repeat(50)}</Text> });
-    allItems.push({ key: "blocked-hdr", node: (
-      <Text bold color="red">Blocked / Escalated ({blockedRuns.length})</Text>
+  // Escalated runs section
+  if (escalatedRuns.length > 0) {
+    allItems.push({ key: "escalated-sep", node: <Text dimColor>{"\u2500".repeat(50)}</Text> });
+    allItems.push({ key: "escalated-hdr", node: (
+      <Box gap={2}>
+        <Text bold color="yellow">Escalated ({escalatedRuns.length})</Text>
+        <Text dimColor>Enter open  T take-over</Text>
+      </Box>
     )});
 
-    for (const r of blockedRuns) {
+    for (const r of escalatedRuns) {
       const title = ((r.metadata as Record<string, unknown>)?.title as string) ?? "";
       const isSelected = selectableIndex === selectedIndex;
 
-      allItems.push({ key: `blocked-${r.id}`, node: (
+      allItems.push({ key: `escalated-${r.id}`, node: (
+        <Text inverse={isSelected} bold={isSelected}>
+          {isSelected ? ">" : " "}
+          <Text color="yellow"> #{r.issueNumber}</Text>
+          {" "}
+          <Text dimColor>{r.currentPhase ?? ""}</Text>
+          {" "}
+          <Text dimColor>{truncTitle(title, 25)}</Text>
+          {"  "}
+          <Text dimColor>{formatAge(r.updatedAt)}</Text>
+          {"  "}
+          {r.blockedReason ? <Text color="yellow">{truncTitle(r.blockedReason, 30)}</Text> : null}
+        </Text>
+      )});
+      selectableIndex++;
+    }
+  }
+
+  // Failed runs section
+  if (failedRuns.length > 0) {
+    allItems.push({ key: "failed-sep", node: <Text dimColor>{"\u2500".repeat(50)}</Text> });
+    allItems.push({ key: "failed-hdr", node: (
+      <Box gap={2}>
+        <Text bold color="red">Failed ({failedRuns.length})</Text>
+        <Text dimColor>r retry  Enter open</Text>
+      </Box>
+    )});
+
+    for (const r of failedRuns) {
+      const title = ((r.metadata as Record<string, unknown>)?.title as string) ?? "";
+      const isSelected = selectableIndex === selectedIndex;
+
+      allItems.push({ key: `failed-${r.id}`, node: (
         <Text inverse={isSelected} bold={isSelected}>
           {isSelected ? ">" : " "}
           <Text color="red"> #{r.issueNumber}</Text>
           {" "}
-          <Text color={r.status === "escalated" ? "yellow" : "red"}>{r.status}</Text>
-          {" "}
           <Text dimColor>{r.currentPhase ?? ""}</Text>
           {" "}
-          <Text dimColor>{title.length > 25 ? title.slice(0, 24) + "\u2026" : title}</Text>
+          <Text dimColor>{truncTitle(title, 25)}</Text>
           {"  "}
           <Text dimColor>{formatAge(r.updatedAt)}</Text>
         </Text>
@@ -171,13 +267,14 @@ export function ApprovalQueueView({ items, blockedRuns, awaitingReviewRuns, read
     allItems.push({ key: "empty", node: <Text dimColor>No pending items. All clear!</Text> });
   }
 
+  const totalSelectable = items.length + awaitingReviewRuns.length + readyToMergeRuns.length + escalatedRuns.length + failedRuns.length;
   const visible = allItems.slice(0, Math.max(height - 4, 5));
 
   return (
     <Box flexDirection="column" flexGrow={1} paddingLeft={1} paddingRight={1}>
       <Box justifyContent="space-between" flexShrink={0}>
-        <Text bold color="cyan">Approval Queue</Text>
-        <Text dimColor>j/k nav  Enter open  A approve  W rework  O open PR  C done  Esc back</Text>
+        <Text bold color="cyan">Review Inbox</Text>
+        <Text dimColor>{totalSelectable} items  j/k nav  Enter open run  Esc back</Text>
       </Box>
       <Box flexDirection="column" marginTop={1} flexGrow={1}>
         {visible.map((item) => (
