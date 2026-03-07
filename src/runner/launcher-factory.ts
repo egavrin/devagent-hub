@@ -46,8 +46,8 @@ export class LauncherFactory {
         const phaseMatch = rule.phases.includes("*") || rule.phases.includes(phase);
         if (!phaseMatch) continue;
 
-        if (rule.complexity && context?.complexity) {
-          if (!rule.complexity.includes(context.complexity)) continue;
+        if (rule.complexity) {
+          if (!context?.complexity || !rule.complexity.includes(context.complexity)) continue;
         }
 
         if (this.config.profiles[rule.profile]) {
