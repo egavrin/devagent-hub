@@ -32,9 +32,16 @@
 - `approval-queue-view.tsx` — Navigable list of pending approvals + blocked runs
 - `why-paused-panel.tsx` — Explains why a run is paused/blocked/failed with suggestions
 
-## Known Issues
-- 2 pre-existing test failures in `orchestrator-watch.test.ts` (status "done" vs expected "awaiting_human_review")
-- `status-bar.tsx` and `detail-panel.tsx` are legacy — kept for compatibility but not used by main app
+## Data Model
+- WorkflowRun now has `sourceType` ("issue" | "pr") and `mode` ("assisted" | "watch") as first-class DB fields
+- Store has auto-migration for existing DBs (adds columns if missing)
+- `store.listAll()` returns all runs sorted by updated_at DESC
+- `store.listPendingApprovals()` returns all unresolved approvals across runs
+
+## Cleanup Done
+- Dead components removed: `detail-panel.tsx`, `status-bar.tsx`, `run-detail.tsx`
+- Watch mode tests fixed: expectations updated to match auto-complete behavior (done, not awaiting_human_review)
+- `useWorkflowRuns` now uses `store.listAll()` instead of per-status queries
 
 ## Workflow Statuses
 new -> triaged -> plan_draft -> plan_accepted -> implementing -> awaiting_local_verify -> draft_pr_opened -> auto_review_fix_loop/awaiting_human_review -> done
