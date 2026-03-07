@@ -37,6 +37,7 @@ export function TimelinePane({ agentRuns, transitions, artifacts, isFocused, hei
     const dur = formatDuration(ar.startedAt, ar.finishedAt);
 
     const kindBadge = ar.executorKind ? ` [${ar.executorKind}]` : "";
+    const profileBadge = ar.profile ? ` @${ar.profile}` : "";
 
     entries.push({
       time: ar.startedAt.slice(11, 19),
@@ -49,9 +50,39 @@ export function TimelinePane({ agentRuns, transitions, artifacts, isFocused, hei
             ? <Text color="cyan" bold> {ar.phase}</Text>
             : <Text> {ar.phase}</Text>
           }
-          {kindBadge ? <Text dimColor>{kindBadge}</Text> : ""}
+          {kindBadge ? <Text color="blue">{kindBadge}</Text> : ""}
+          {profileBadge ? <Text dimColor>{profileBadge}</Text> : ""}
           <Text dimColor> {dur}</Text>
           {ar.iterations ? <Text dimColor> ({ar.iterations} iters)</Text> : ""}
+          {ar.exitReason ? <Text color="red"> {ar.exitReason}</Text> : ""}
+        </Text>
+      ),
+    });
+  }
+
+  // Non-gate artifacts as timeline markers
+  const nonGateArtifacts = artifacts.filter((a) => a.type !== "gate_verdict");
+  for (const a of nonGateArtifacts) {
+    const typeColors: Record<string, string> = {
+      triage_report: "cyan",
+      plan_draft: "yellow",
+      accepted_plan: "green",
+      implementation_report: "blue",
+      verification_report: "green",
+      review_report: "magenta",
+      repair_report: "red",
+      diff_summary: "gray",
+    };
+    const color = typeColors[a.type] ?? "white";
+    const summaryShort = a.summary.length > 40 ? a.summary.slice(0, 39) + "\u2026" : a.summary;
+
+    entries.push({
+      time: a.createdAt.slice(11, 19),
+      sortKey: a.createdAt,
+      node: (
+        <Text>
+          <Text color={color}>{"\u25C6"} {a.type.replace(/_/g, " ")}</Text>
+          {summaryShort ? <Text dimColor> {summaryShort}</Text> : ""}
         </Text>
       ),
     });

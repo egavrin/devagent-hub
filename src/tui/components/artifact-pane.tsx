@@ -6,6 +6,7 @@ import { ArtifactDiffView } from "./artifact-diff-view.js";
 interface ArtifactPaneProps {
   artifacts: Artifact[];
   approvals: ApprovalRequest[];
+  agentRuns?: import("../../state/types.js").AgentRun[];
   isFocused: boolean;
   height: number;
   showDiff?: boolean;
@@ -151,16 +152,28 @@ function renderPlanSections(
   }
 }
 
-export function ArtifactPane({ artifacts, approvals, isFocused, height, showDiff }: ArtifactPaneProps) {
+export function ArtifactPane({ artifacts, approvals, agentRuns, isFocused, height, showDiff }: ArtifactPaneProps) {
   const lines: Array<{ key: string; node: React.ReactNode }> = [];
+
+  // Build agent run lookup for attribution
+  const agentRunMap = new Map<string, import("../../state/types.js").AgentRun>();
+  if (agentRuns) {
+    for (const ar of agentRuns) {
+      agentRunMap.set(ar.id, ar);
+    }
+  }
 
   // Show latest artifact prominently with expanded detail
   const latest = artifacts.length > 0 ? artifacts[artifacts.length - 1] : null;
   if (latest) {
     const color = TYPE_COLORS[latest.type] ?? "white";
     const label = TYPE_LABELS[latest.type] ?? latest.type;
+    const producer = latest.agentRunId ? agentRunMap.get(latest.agentRunId) : null;
+    const attribution = producer?.executorKind
+      ? ` by ${producer.executorKind}${producer.profile ? ` @${producer.profile}` : ""}`
+      : "";
     lines.push({ key: "latest-hdr", node: (
-      <Text bold><Text color={color}>{label}</Text>{verdictBadge(latest)}</Text>
+      <Text bold><Text color={color}>{label}</Text>{verdictBadge(latest)}<Text dimColor>{attribution}</Text></Text>
     )});
 
     // Summary
@@ -223,12 +236,15 @@ export function ArtifactPane({ artifacts, approvals, isFocused, height, showDiff
     lines.push({ key: "history-hdr", node: <Text bold>History</Text> });
     for (const a of artifacts.slice(0, -1).reverse()) {
       const color = TYPE_COLORS[a.type] ?? "white";
+      const producer = a.agentRunId ? agentRunMap.get(a.agentRunId) : null;
+      const kindTag = producer?.executorKind ? ` [${producer.executorKind}]` : "";
       lines.push({ key: `hist-${a.id}`, node: (
         <Text>
           <Text dimColor>{a.createdAt.slice(11, 19)} </Text>
           <Text color={color}>{a.type}</Text>
           {verdictBadge(a)}
-          <Text dimColor> {truncate(a.summary, 45)}</Text>
+          {kindTag ? <Text color="blue">{kindTag}</Text> : ""}
+          <Text dimColor> {truncate(a.summary, 40)}</Text>
         </Text>
       )});
     }

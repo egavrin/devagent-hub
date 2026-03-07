@@ -1,11 +1,12 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { WorkflowRun, Artifact } from "../../state/types.js";
+import type { WorkflowRun, Artifact, AgentRun } from "../../state/types.js";
 
 interface RunHeaderProps {
   run: WorkflowRun;
   isActive: boolean;
   gateVerdicts?: Artifact[];
+  latestAgentRun?: AgentRun | null;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -33,23 +34,23 @@ function formatAge(dateStr: string): string {
   return `${Math.floor(ms / 86400_000)}d`;
 }
 
-function nextActionHint(status: string): string {
+function nextActionHint(status: string): { text: string; urgent: boolean } {
   switch (status) {
-    case "new": return "Press C to triage";
-    case "triaged": return "Press C to plan";
-    case "plan_draft": return "Press A to approve, W to rework";
-    case "plan_revision": return "Press A to approve";
-    case "plan_accepted": return "Press C to implement";
-    case "implementing": return "Running...";
-    case "awaiting_local_verify": return "Press C to open PR";
-    case "draft_pr_opened": return "Press C to review";
-    case "auto_review_fix_loop": return "Press C to repair";
-    case "awaiting_human_review": return "Awaiting human review";
-    case "ready_to_merge": return "Ready to merge";
-    case "done": return "Complete";
-    case "escalated": return "Needs human intervention";
-    case "failed": return "Press R to retry";
-    default: return "";
+    case "new": return { text: "C triage", urgent: false };
+    case "triaged": return { text: "C plan", urgent: false };
+    case "plan_draft": return { text: "A approve  W rework", urgent: true };
+    case "plan_revision": return { text: "A approve", urgent: true };
+    case "plan_accepted": return { text: "C implement", urgent: false };
+    case "implementing": return { text: "Running...", urgent: false };
+    case "awaiting_local_verify": return { text: "C open PR", urgent: false };
+    case "draft_pr_opened": return { text: "C review", urgent: false };
+    case "auto_review_fix_loop": return { text: "C repair", urgent: true };
+    case "awaiting_human_review": return { text: "A approve  C mark reviewed  O open PR", urgent: true };
+    case "ready_to_merge": return { text: "A mark done  O open PR", urgent: true };
+    case "done": return { text: "Complete", urgent: false };
+    case "escalated": return { text: "T take-over  R retry", urgent: true };
+    case "failed": return { text: "r retry  R rerun-profile", urgent: true };
+    default: return { text: "", urgent: false };
   }
 }
 
@@ -72,7 +73,7 @@ function GateChain({ gateVerdicts }: { gateVerdicts: Artifact[] }) {
   );
 }
 
-export function RunHeader({ run, isActive, gateVerdicts }: RunHeaderProps) {
+export function RunHeader({ run, isActive, gateVerdicts, latestAgentRun }: RunHeaderProps) {
   const title = (run.metadata as Record<string, unknown>)?.title as string | undefined;
   const statusColor = STATUS_COLORS[run.status] ?? "white";
   const repoShort = run.repo.split("/").pop() ?? run.repo;
@@ -107,10 +108,14 @@ export function RunHeader({ run, isActive, gateVerdicts }: RunHeaderProps) {
         <Text dimColor>Age: {formatAge(run.createdAt)}</Text>
       </Box>
 
-      {(run.runnerId || run.agentProfile) && (
+      {(run.runnerId || run.agentProfile || latestAgentRun?.executorKind) && (
         <Box gap={2}>
-          {run.runnerId && <Text dimColor>Runner: {run.runnerId}</Text>}
           {run.agentProfile && <Text dimColor>Profile: {run.agentProfile}</Text>}
+          {run.runnerId && <Text dimColor>Runner: {run.runnerId}</Text>}
+          {latestAgentRun?.executorKind && (
+            <Text dimColor>Role: <Text color="cyan">{latestAgentRun.executorKind}</Text></Text>
+          )}
+          {run.actualModel && <Text dimColor>Model: {run.actualModel}</Text>}
         </Box>
       )}
 
@@ -121,10 +126,11 @@ export function RunHeader({ run, isActive, gateVerdicts }: RunHeaderProps) {
 
       <GateChain gateVerdicts={gateVerdicts ?? []} />
 
+      {/* Sticky blocked reason — prominent red bar */}
       {run.blockedReason && (
         <Box>
           <Text color="red" bold>BLOCKED: </Text>
-          <Text>{run.blockedReason}</Text>
+          <Text color="red">{run.blockedReason}</Text>
         </Box>
       )}
 
@@ -135,8 +141,13 @@ export function RunHeader({ run, isActive, gateVerdicts }: RunHeaderProps) {
         </Box>
       )}
 
-      {hint && (
-        <Text color="yellow">{hint}</Text>
+      {/* Sticky next-decision bar */}
+      {hint.text && (
+        <Box>
+          <Text color={hint.urgent ? "yellow" : "gray"} bold={hint.urgent}>
+            {hint.urgent ? "▸ " : ""}{hint.text}
+          </Text>
+        </Box>
       )}
     </Box>
   );

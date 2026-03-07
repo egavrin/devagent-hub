@@ -755,6 +755,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
               run={selectedRun}
               isActive={!!activeProcessId}
               gateVerdicts={gateVerdicts}
+              latestAgentRun={agentRuns.length > 0 ? agentRuns[agentRuns.length - 1] : null}
             />
           </Box>
 
@@ -771,6 +772,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
               <ArtifactPane
                 artifacts={artifacts}
                 approvals={approvals}
+                agentRuns={agentRuns}
                 isFocused={ui.focusedPane === "artifact"}
                 height={paneHeight * 2}
                 showDiff={ui.showArtifactDiff}
