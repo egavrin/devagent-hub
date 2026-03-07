@@ -21,6 +21,8 @@ export interface KeybindingActions {
   onOpenExternal: () => void;
   onApprovalsView: () => void;
   onToggleDiff: () => void;
+  onPause: () => void;
+  onTakeOver: () => void;
 }
 
 export function useKeybindings(
@@ -69,5 +71,7 @@ export function useKeybindings(
     if (input === "o" || input === "O") actions.onOpenExternal();
     if (input === "v" || input === "V") actions.onApprovalsView();
     if (input === "f" || input === "F") actions.onToggleDiff();
+    if (input === "p" || input === "P") actions.onPause();
+    if (input === "t" || input === "T") actions.onTakeOver();
   });
 }

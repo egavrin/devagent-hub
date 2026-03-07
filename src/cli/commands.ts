@@ -9,7 +9,9 @@ import type { WorkflowStatus } from "../state/types.js";
 import { WorkflowOrchestrator } from "../workflow/orchestrator.js";
 import { loadWorkflowConfig } from "../workflow/config.js";
 import type { WorkflowConfig } from "../workflow/config.js";
-import { RunLauncher } from "../runner/launcher.js";
+import { LauncherFactory } from "../runner/launcher-factory.js";
+import { PhaseDispatchLauncher } from "../runner/phase-dispatch-launcher.js";
+import type { ProcessRegistry } from "../runner/process-registry.js";
 import { LLMReviewGate } from "../workflow/review-gate.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "devagent-hub");
@@ -43,17 +45,16 @@ function detectRepoRoot(): string {
   }).trim();
 }
 
-function createLauncher(config: WorkflowConfig): RunLauncher {
-  return new RunLauncher({
-    devagentBin: config.runner.bin ?? "devagent",
-    artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
-    timeout: 15 * 60 * 1000,
-    approvalMode: config.runner.approval_mode,
-    maxIterations: config.runner.max_iterations,
-    provider: config.runner.provider,
-    model: config.runner.model,
-    reasoning: config.runner.reasoning,
-  });
+function createLauncher(config: WorkflowConfig, registry?: ProcessRegistry): PhaseDispatchLauncher {
+  const factory = new LauncherFactory(config, registry);
+  for (const [bin, desc] of factory.describeRunners()) {
+    if (desc) {
+      process.stderr.write(`[hub] Runner: ${bin} v${desc.version} (phases: ${desc.supportedPhases.join(", ")})\n`);
+    } else {
+      process.stderr.write(`[hub] Warning: runner "${bin}" does not support "workflow describe"\n`);
+    }
+  }
+  return new PhaseDispatchLauncher(factory, { streaming: !!registry });
 }
 
 export async function runCommand(args: string[]): Promise<void> {
@@ -237,31 +238,15 @@ export async function uiCommand(args: string[]): Promise<void> {
   const config = loadWorkflowConfig(repoRoot);
 
   const { ProcessRegistry } = await import("../runner/process-registry.js");
-  const { StreamingLauncher } = await import("../runner/streaming-launcher.js");
-  const { StreamingLauncherAdapter } = await import("../runner/streaming-adapter.js");
   const { launchTUI } = await import("../tui/index.js");
 
   const registry = new ProcessRegistry();
-
-  const streamingLauncher = new StreamingLauncher({
-    devagentBin: config.runner.bin ?? "devagent",
-    artifactsDir: join(homedir(), ".config", "devagent-hub", "artifacts"),
-    timeout: 15 * 60 * 1000,
-    approvalMode: config.runner.approval_mode,
-    maxIterations: config.runner.max_iterations,
-    provider: config.runner.provider,
-    model: config.runner.model,
-    reasoning: config.runner.reasoning,
-    registry,
-  });
-
-  const adapter = new StreamingLauncherAdapter(streamingLauncher);
-
+  const launcher = createLauncher(config, registry);
   const worktreeManager = new WorktreeManager(repoRoot);
   const orchestrator = new WorkflowOrchestrator({
     store,
     github: new GhCliGateway(),
-    launcher: adapter,
+    launcher,
     repo,
     repoRoot,
     config,

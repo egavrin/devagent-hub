@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { buildLaunchArgs } from "./args-builder.js";
 import type { LaunchOptions } from "./args-builder.js";
+import type { RunnerDescription } from "../workflow/stage-schemas.js";
 
 export interface LaunchResult {
   exitCode: number;
@@ -20,6 +21,23 @@ export interface LauncherConfig {
   maxIterations?: number;
   approvalMode?: string;
   reasoning?: string;
+}
+
+/**
+ * Query the runner for its capabilities via `devagent workflow describe`.
+ * Returns null if the runner doesn't support the command.
+ */
+export function describeRunner(bin: string): RunnerDescription | null {
+  const binParts = bin.split(/\s+/);
+  try {
+    const raw = execFileSync(binParts[0], [...binParts.slice(1), "workflow", "describe"], {
+      encoding: "utf-8",
+      timeout: 10_000,
+    });
+    return JSON.parse(raw) as RunnerDescription;
+  } catch {
+    return null;
+  }
 }
 
 export class RunLauncher {

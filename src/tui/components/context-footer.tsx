@@ -66,6 +66,11 @@ function runHints(status: string | null, hasActiveProcess: boolean): HintEntry[]
     hints.push({ key: "K", label: "kill" });
   }
 
+  const terminal = ["done", "failed", "escalated"];
+  if (status && !terminal.includes(status)) {
+    hints.push({ key: "P", label: "pause" });
+    hints.push({ key: "T", label: "take-over" });
+  }
   hints.push({ key: "F", label: "diff" });
   hints.push({ key: "O", label: "open PR" });
   hints.push({ key: "Q", label: "quit" });

@@ -25,6 +25,15 @@ export class WorkflowConfigError extends Error {
   }
 }
 
+export interface AgentProfile {
+  bin?: string;
+  provider?: string;
+  model?: string;
+  reasoning?: string;
+  max_iterations?: number;
+  approval_mode?: string;
+}
+
 export interface WorkflowConfig {
   version: number;
   mode: WorkflowMode;
@@ -32,7 +41,8 @@ export interface WorkflowConfig {
   dispatch: { max_concurrency: number };
   workspace: { mode: string; root: string };
   runner: { bin?: string; approval_mode: string; max_iterations: number; provider?: string; model?: string; reasoning?: string };
-  roles: { triage: string; plan: string; implement: string; review: string };
+  profiles: Record<string, AgentProfile>;
+  roles: Record<string, string>;
   verify: { commands: string[] };
   pr: { draft: boolean; open_requires: string[] };
   repair: { max_rounds: number };
@@ -47,11 +57,14 @@ export function defaultConfig(): WorkflowConfig {
     dispatch: { max_concurrency: 4 },
     workspace: { mode: "worktree", root: "." },
     runner: { approval_mode: "full-auto", max_iterations: 10 },
+    profiles: { default: {} },
     roles: {
-      triage: "devagent",
-      plan: "devagent",
-      implement: "devagent",
-      review: "devagent",
+      triage: "default",
+      plan: "default",
+      implement: "default",
+      review: "default",
+      repair: "default",
+      gate: "default",
     },
     verify: { commands: ["bun run test", "bun run typecheck"] },
     pr: { draft: true, open_requires: ["verify"] },
@@ -95,6 +108,30 @@ export function validateConfig(config: WorkflowConfig): void {
     throw new WorkflowConfigError(
       `repair.max_rounds must be >= 0, got ${config.repair.max_rounds}`,
     );
+  }
+
+  // Validate profiles
+  for (const [name, profile] of Object.entries(config.profiles)) {
+    if (profile.approval_mode && !VALID_APPROVAL_MODES.has(profile.approval_mode)) {
+      throw new WorkflowConfigError(
+        `Invalid approval_mode "${profile.approval_mode}" in profile "${name}"`,
+      );
+    }
+    if (profile.reasoning && !VALID_REASONING_LEVELS.has(profile.reasoning)) {
+      throw new WorkflowConfigError(
+        `Invalid reasoning "${profile.reasoning}" in profile "${name}"`,
+      );
+    }
+  }
+
+  // Validate roles reference existing profiles
+  for (const [role, profileName] of Object.entries(config.roles)) {
+    if (!config.profiles[profileName]) {
+      throw new WorkflowConfigError(
+        `Role "${role}" references undefined profile "${profileName}". ` +
+        `Available profiles: ${Object.keys(config.profiles).join(", ")}`,
+      );
+    }
   }
 }
 

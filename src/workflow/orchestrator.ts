@@ -5,6 +5,14 @@ import type { WorkflowRun } from "../state/types.js";
 import type { LaunchResult } from "../runner/launcher.js";
 import type { WorktreeManager } from "../workspace/worktree-manager.js";
 import type { ReviewGate, GateVerdict } from "./review-gate.js";
+import type {
+  TriageOutput,
+  PlanOutput,
+  ImplementOutput,
+  VerifyOutput,
+  ReviewOutput,
+  RepairOutput,
+} from "./stage-schemas.js";
 import { defaultConfig } from "./config.js";
 import { execFileSync } from "node:child_process";
 
@@ -15,6 +23,17 @@ export interface Finding {
   message: string;
   category: string;
   author?: string;
+}
+
+/** Safely cast launcher output to a typed phase output, returning null on mismatch. */
+function asOutput<T>(output: unknown): T | null {
+  if (output && typeof output === "object") return output as T;
+  return null;
+}
+
+/** Convert a typed output back to Record for artifact storage. */
+function toData(output: unknown): Record<string, unknown> {
+  return (output as Record<string, unknown>) ?? {};
 }
 
 /** Best-effort GitHub call — logs error but does not throw. */
@@ -62,6 +81,26 @@ export class WorkflowOrchestrator {
 
   private get isWatchMode(): boolean {
     return this.config.mode === "watch" && this.reviewGate !== undefined;
+  }
+
+  /** Request the workflow to pause after the current phase completes. */
+  requestPause(runId: string): void {
+    const run = this.store.getWorkflowRun(runId);
+    if (!run) return;
+    this.store.updateWorkflowRun(runId, {
+      metadata: { ...run.metadata, pauseRequested: true },
+    });
+    process.stderr.write(`[orchestrator] Pause requested for run ${runId.slice(0, 8)}\n`);
+  }
+
+  /** Check if a pause was requested and clear the flag. Returns true if paused. */
+  private checkPause(runId: string): boolean {
+    const run = this.store.getWorkflowRun(runId);
+    if (!run?.metadata?.pauseRequested) return false;
+    const { pauseRequested: _, ...rest } = run.metadata;
+    this.store.updateWorkflowRun(runId, { metadata: rest });
+    process.stderr.write(`[orchestrator] Run ${runId.slice(0, 8)} paused between phases\n`);
+    return true;
   }
 
   /**
@@ -156,15 +195,15 @@ export class WorkflowOrchestrator {
     }
 
     // Store triage artifact
-    const output = result.output as Record<string, unknown> | null;
-    const summary = (output?.summary as string) ?? "Triage completed successfully.";
+    const output = asOutput<TriageOutput>(result.output);
+    const summary = output?.summary ?? "Triage completed successfully.";
     this.store.createArtifact({
       workflowRunId: workflowRun.id,
       agentRunId: agentRun.id,
       type: "triage_report",
       phase: "triage",
       summary,
-      data: output ?? {},
+      data: toData(output),
       filePath: result.outputPath,
     });
 
@@ -233,15 +272,15 @@ export class WorkflowOrchestrator {
     }
 
     // Store plan artifact
-    const output = result.output as Record<string, unknown> | null;
-    const summary = (output?.summary as string) ?? "Plan created successfully.";
+    const output = asOutput<PlanOutput>(result.output);
+    const summary = output?.summary ?? "Plan created successfully.";
     this.store.createArtifact({
       workflowRunId: workflowRun.id,
       agentRunId: agentRun.id,
       type: "plan_draft",
       phase: "plan",
       summary,
-      data: output ?? {},
+      data: toData(output),
       filePath: result.outputPath,
     });
 
@@ -400,15 +439,15 @@ export class WorkflowOrchestrator {
     }
 
     // Store implementation artifact
-    const output = result.output as Record<string, unknown> | null;
-    const summary = (output?.summary as string) ?? "Implementation completed.";
+    const output = asOutput<ImplementOutput>(result.output);
+    const summary = output?.summary ?? "Implementation completed.";
     this.store.createArtifact({
       workflowRunId: workflowRun.id,
       agentRunId: agentRun.id,
       type: "implementation_report",
       phase: "implement",
       summary,
-      data: output ?? {},
+      data: toData(output),
       filePath: result.outputPath,
     });
 
@@ -458,15 +497,15 @@ export class WorkflowOrchestrator {
     }
 
     // Store verification artifact
-    const output = result.output as Record<string, unknown> | null;
-    const summary = (output?.summary as string) ?? "Verification passed.";
+    const output = asOutput<VerifyOutput>(result.output);
+    const summary = output?.summary ?? "Verification passed.";
     this.store.createArtifact({
       workflowRunId: workflowRun.id,
       agentRunId: agentRun.id,
       type: "verification_report",
       phase: "verify",
       summary,
-      data: output ?? {},
+      data: toData(output),
       filePath: result.outputPath,
     });
 
@@ -493,7 +532,8 @@ export class WorkflowOrchestrator {
 
     // 3. Push branch (commit uncommitted changes first)
     const implArtifact = this.store.getLatestArtifact(workflowRun.id, "implementation_report");
-    const commitMsg = (implArtifact?.data?.suggestedCommitMessage as string) ?? `feat: devagent changes for #${issueNumber}`;
+    const implData = implArtifact?.data as ImplementOutput | undefined;
+    const commitMsg = implData?.suggestedCommitMessage ?? `feat: devagent changes for #${issueNumber}`;
     await this.github.pushBranch(workDir, branch, commitMsg);
 
     // 4. Fetch issue for title
@@ -577,10 +617,10 @@ export class WorkflowOrchestrator {
       return this.store.getWorkflowRun(wfRun.id)!;
     }
 
-    const output = result.output as Record<string, unknown> | null;
-    const verdict = (output?.verdict as string) ?? "pass";
-    const blockingCount = (output?.blockingCount as number) ?? 0;
-    const summary = (output?.summary as string) ?? "Review complete.";
+    const output = asOutput<ReviewOutput>(result.output);
+    const verdict = output?.verdict ?? "pass";
+    const blockingCount = output?.blockingCount ?? 0;
+    const summary = output?.summary ?? "Review complete.";
 
     // Store review artifact
     this.store.createArtifact({
@@ -589,7 +629,7 @@ export class WorkflowOrchestrator {
       type: "review_report",
       phase: "review",
       summary,
-      data: output ?? {},
+      data: toData(output),
       filePath: result.outputPath,
     });
 
@@ -669,10 +709,10 @@ export class WorkflowOrchestrator {
       return this.store.getWorkflowRun(wfRun.id)!;
     }
 
-    const output = result.output as Record<string, unknown> | null;
-    const remainingFindings = (output?.remainingFindings as number) ?? 0;
-    const verificationPassed = (output?.verificationPassed as boolean) ?? true;
-    const summary = (output?.summary as string) ?? `Repair round ${currentRound} complete.`;
+    const output = asOutput<RepairOutput>(result.output);
+    const remainingFindings = output?.remainingFindings ?? 0;
+    const verificationPassed = output?.verificationPassed ?? true;
+    const summary = output?.summary ?? `Repair round ${currentRound} complete.`;
 
     // Store repair artifact
     this.store.createArtifact({
@@ -681,7 +721,7 @@ export class WorkflowOrchestrator {
       type: "repair_report",
       phase: "repair",
       summary,
-      data: output ?? {},
+      data: toData(output),
       filePath: result.outputPath,
     });
 
@@ -782,8 +822,8 @@ export class WorkflowOrchestrator {
       return { run: this.store.getWorkflowRun(wfRun.id)!, summary: "" };
     }
 
-    const output = result.output as Record<string, unknown> | null;
-    const summary = (output?.summary as string) ?? `${label} (round ${currentRound}) complete.`;
+    const output = asOutput<RepairOutput>(result.output);
+    const summary = output?.summary ?? `${label} (round ${currentRound}) complete.`;
 
     this.store.createArtifact({
       workflowRunId: wfRun.id,
@@ -791,7 +831,7 @@ export class WorkflowOrchestrator {
       type: "repair_report",
       phase: "repair",
       summary,
-      data: output ?? {},
+      data: toData(output),
       filePath: result.outputPath,
     });
 
@@ -1049,6 +1089,8 @@ export class WorkflowOrchestrator {
       return this.store.getWorkflowRun(run.id)!;
     }
 
+    if (this.checkPause(run.id)) return this.store.getWorkflowRun(run.id)!;
+
     // Phase 2: Plan + gate (with rework loop)
     for (let attempt = 0; attempt <= maxGateReworks; attempt++) {
       run = await this.plan(issueNumber);
@@ -1081,6 +1123,7 @@ export class WorkflowOrchestrator {
     }
 
     if (run.status !== "plan_accepted") return run;
+    if (this.checkPause(run.id)) return this.store.getWorkflowRun(run.id)!;
 
     // Phase 3: Implement + gate
     run = await this.implement(issueNumber);
@@ -1112,6 +1155,8 @@ export class WorkflowOrchestrator {
       return this.store.getWorkflowRun(run.id)!;
     }
 
+    if (this.checkPause(run.id)) return this.store.getWorkflowRun(run.id)!;
+
     // Phase 4: Verify
     run = await this.verify(issueNumber);
     if (run.status === "failed") return run;
@@ -1121,6 +1166,8 @@ export class WorkflowOrchestrator {
       run = await this.openPR(issueNumber);
       if (run.status === "failed") return run;
     }
+
+    if (this.checkPause(run.id)) return this.store.getWorkflowRun(run.id)!;
 
     // Phase 6: Wait for CI, fix failures if any
     run = await this.waitForCIAndFix(issueNumber, run);

@@ -407,6 +407,22 @@ export function App({ store, registry, orchestrator }: AppProps) {
     dispatch({ type: "SET_SCREEN", screen: "approvals" });
   }, []);
 
+  const handlePause = useCallback(() => {
+    if (!selectedRun) return;
+    orchestrator.requestPause(selectedRun.id);
+    showStatus(`Pause requested for #${selectedRun.issueNumber} — will pause after current phase`);
+  }, [selectedRun, orchestrator, showStatus]);
+
+  const handleTakeOver = useCallback(() => {
+    if (!selectedRun) return;
+    const worktree = (selectedRun.metadata as Record<string, unknown>)?.worktree as string | undefined;
+    if (worktree) {
+      showStatus(`Worktree: ${worktree}`);
+    } else {
+      showStatus(`No worktree path for #${selectedRun.issueNumber}`);
+    }
+  }, [selectedRun, showStatus]);
+
   // ─── Keybindings ─────────────────────────────────────────────
 
   const isDialogOpen = ui.dialog !== null;
@@ -431,6 +447,8 @@ export function App({ store, registry, orchestrator }: AppProps) {
     onOpenExternal: handleOpenExternal,
     onApprovalsView: handleApprovalsView,
     onToggleDiff: () => dispatch({ type: "TOGGLE_ARTIFACT_DIFF" }),
+    onPause: isDialogOpen ? () => {} : handlePause,
+    onTakeOver: isDialogOpen ? () => {} : handleTakeOver,
   }, ui.screen, ui.inputMode || isDialogOpen);
 
   // ─── Render ──────────────────────────────────────────────────
