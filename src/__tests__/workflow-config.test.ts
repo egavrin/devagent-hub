@@ -181,15 +181,15 @@ describe("validateConfig", () => {
     expect(() => validateConfig(cfg)).not.toThrow();
   });
 
-  it("accepts valid modes: assisted, watch", () => {
-    for (const mode of ["assisted", "watch"] as const) {
+  it("accepts valid modes: assisted, watch, autopilot", () => {
+    for (const mode of ["assisted", "watch", "autopilot"] as const) {
       const cfg = { ...defaultConfig(), mode };
       expect(() => validateConfig(cfg)).not.toThrow();
     }
   });
 
   it("rejects invalid mode", () => {
-    const cfg = { ...defaultConfig(), mode: "autopilot" as any };
+    const cfg = { ...defaultConfig(), mode: "yolo" as any };
     expect(() => validateConfig(cfg)).toThrow(WorkflowConfigError);
   });
 

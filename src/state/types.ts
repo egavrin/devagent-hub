@@ -5,7 +5,7 @@ export type WorkflowStatus =
   | "done" | "escalated" | "failed";
 
 export type SourceType = "issue" | "pr";
-export type WorkflowMode = "assisted" | "watch";
+export type WorkflowMode = "assisted" | "watch" | "autopilot";
 
 export interface WorkflowRun {
   id: string;
