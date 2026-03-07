@@ -15,6 +15,10 @@ export interface WorkflowRun {
   status: WorkflowStatus;
   sourceType: SourceType;
   mode: WorkflowMode;
+  runnerId: string | null;
+  agentProfile: string | null;
+  blockedReason: string | null;
+  nextAction: string | null;
   branch: string | null;
   prNumber: number | null;
   prUrl: string | null;
@@ -38,6 +42,10 @@ export interface AgentRun {
   eventsPath: string | null;
   iterations: number | null;
   costUsd: number | null;
+  runnerId: string | null;
+  executorKind: "executor" | "reviewer" | "repairer" | null;
+  profile: string | null;
+  triggeredBy: "human" | "policy" | "autopilot" | null;
 }
 
 export interface StatusTransition {
@@ -71,6 +79,9 @@ export interface Artifact {
   data: Record<string, unknown>;
   filePath: string | null;
   createdAt: string;
+  verdict: string | null;
+  blockingCount: number | null;
+  confidence: number | null;
 }
 
 // ─── Approval Requests ──────────────────────────────────────
@@ -86,4 +97,6 @@ export interface ApprovalRequest {
   reviewerComment: string | null;
   resolvedAt: string | null;
   createdAt: string;
+  severity: "low" | "medium" | "high" | "critical" | null;
+  recommendedAction: string | null;
 }

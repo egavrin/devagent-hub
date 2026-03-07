@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   status TEXT NOT NULL DEFAULT 'new',
   source_type TEXT NOT NULL DEFAULT 'issue',
   mode TEXT NOT NULL DEFAULT 'assisted',
+  runner_id TEXT,
+  agent_profile TEXT,
+  blocked_reason TEXT,
+  next_action TEXT,
   branch TEXT,
   pr_number INTEGER,
   pr_url TEXT,
@@ -45,6 +49,10 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   events_path TEXT,
   iterations INTEGER,
   cost_usd REAL,
+  runner_id TEXT,
+  executor_kind TEXT,
+  profile TEXT,
+  triggered_by TEXT,
   FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
 );
 
@@ -68,6 +76,9 @@ CREATE TABLE IF NOT EXISTS artifacts (
   data TEXT NOT NULL DEFAULT '{}',
   file_path TEXT,
   created_at TEXT NOT NULL,
+  verdict TEXT,
+  blocking_count INTEGER,
+  confidence REAL,
   FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id),
   FOREIGN KEY (agent_run_id) REFERENCES agent_runs(id)
 );
@@ -81,6 +92,8 @@ CREATE TABLE IF NOT EXISTS approval_requests (
   reviewer_comment TEXT,
   resolved_at TEXT,
   created_at TEXT NOT NULL,
+  severity TEXT,
+  recommended_action TEXT,
   FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
 );
 `;
@@ -93,6 +106,10 @@ interface WorkflowRunRow {
   status: string;
   source_type: string;
   mode: string;
+  runner_id: string | null;
+  agent_profile: string | null;
+  blocked_reason: string | null;
+  next_action: string | null;
   branch: string | null;
   pr_number: number | null;
   pr_url: string | null;
@@ -116,6 +133,10 @@ interface AgentRunRow {
   events_path: string | null;
   iterations: number | null;
   cost_usd: number | null;
+  runner_id: string | null;
+  executor_kind: string | null;
+  profile: string | null;
+  triggered_by: string | null;
 }
 
 interface TransitionRow {
@@ -135,6 +156,9 @@ interface ArtifactRow {
   data: string;
   file_path: string | null;
   created_at: string;
+  verdict: string | null;
+  blocking_count: number | null;
+  confidence: number | null;
 }
 
 interface ApprovalRequestRow {
@@ -146,6 +170,8 @@ interface ApprovalRequestRow {
   reviewer_comment: string | null;
   resolved_at: string | null;
   created_at: string;
+  severity: string | null;
+  recommended_action: string | null;
 }
 
 function rowToArtifact(row: ArtifactRow): Artifact {
@@ -159,6 +185,9 @@ function rowToArtifact(row: ArtifactRow): Artifact {
     data: JSON.parse(row.data),
     filePath: row.file_path,
     createdAt: row.created_at,
+    verdict: row.verdict ?? null,
+    blockingCount: row.blocking_count ?? null,
+    confidence: row.confidence ?? null,
   };
 }
 
@@ -172,6 +201,8 @@ function rowToApprovalRequest(row: ApprovalRequestRow): ApprovalRequest {
     reviewerComment: row.reviewer_comment,
     resolvedAt: row.resolved_at,
     createdAt: row.created_at,
+    severity: (row.severity as ApprovalRequest["severity"]) ?? null,
+    recommendedAction: row.recommended_action ?? null,
   };
 }
 
@@ -184,6 +215,10 @@ function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
     status: row.status as WorkflowStatus,
     sourceType: (row.source_type ?? "issue") as SourceType,
     mode: (row.mode ?? "assisted") as WorkflowMode,
+    runnerId: row.runner_id ?? null,
+    agentProfile: row.agent_profile ?? null,
+    blockedReason: row.blocked_reason ?? null,
+    nextAction: row.next_action ?? null,
     branch: row.branch,
     prNumber: row.pr_number,
     prUrl: row.pr_url,

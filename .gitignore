@@ -4,3 +4,9 @@ dist/
 *.db-wal
 *.db-shm
 .worktrees/
+.env
+.env.*
+*.log
+.DS_Store
+coverage/
+tmp/

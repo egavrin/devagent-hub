@@ -4,7 +4,7 @@ export type FocusPane = "queue" | "artifact" | "timeline" | "logs";
 
 export type LogMode = "structured" | "raw";
 
-export type Dialog = null | "new-run" | "rework";
+export type Dialog = null | "new-run" | "rework" | "command-palette" | "help";
 
 export type NewRunSourceType = "issue" | "pr";
 export type NewRunMode = "assisted" | "watch";
@@ -29,6 +29,8 @@ export interface UIState {
   approvalIndex: number;
   statusMessage: string | null;
   showArtifactDiff: boolean;
+  filterQuery: string;
+  filterActive: boolean;
 }
 
 export type UIAction =
@@ -51,6 +53,8 @@ export type UIAction =
   | { type: "SET_STATUS"; message: string | null }
   | { type: "OPEN_RUN"; runId: string }
   | { type: "TOGGLE_ARTIFACT_DIFF" }
+  | { type: "SET_FILTER"; query: string }
+  | { type: "TOGGLE_FILTER" }
   | { type: "BACK" };
 
 const PANE_ORDER: FocusPane[] = ["queue", "artifact", "timeline", "logs"];
@@ -69,6 +73,8 @@ export const initialUIState: UIState = {
   approvalIndex: 0,
   statusMessage: null,
   showArtifactDiff: false,
+  filterQuery: "",
+  filterActive: false,
 };
 
 export function uiReducer(state: UIState, action: UIAction): UIState {
@@ -139,6 +145,14 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
 
     case "TOGGLE_ARTIFACT_DIFF":
       return { ...state, showArtifactDiff: !state.showArtifactDiff };
+
+    case "SET_FILTER":
+      return { ...state, filterQuery: action.query };
+
+    case "TOGGLE_FILTER":
+      return state.filterActive
+        ? { ...state, filterActive: false, filterQuery: "" }
+        : { ...state, filterActive: true };
 
     case "OPEN_RUN":
       return {
