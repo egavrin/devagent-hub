@@ -113,25 +113,26 @@ describe("AutopilotDaemon", () => {
     launcher.setResponse("review", { exitCode: 0, output: { verdict: "pass", blockingCount: 0, summary: "Clean" } });
     launcher.setResponse("gate", { exitCode: 0, output: { verdict: "pass", blockingCount: 0, summary: "Gate OK" } });
 
-    const dispatches: AutopilotEvent[] = [];
+    let firstPollDispatchCount = 0;
+    let firstPollSeen = false;
     const controller = new AbortController();
 
     const daemon = new AutopilotDaemon({
       store, github, orchestrator, config, repo: "org/repo",
       signal: controller.signal,
       onEvent: (e) => {
-        dispatches.push(e);
-        if (e.type === "poll_done") {
-          setTimeout(() => controller.abort(), 200);
+        if (e.type === "poll_done" && !firstPollSeen) {
+          firstPollSeen = true;
+          firstPollDispatchCount = e.dispatched;
+          controller.abort();
         }
       },
     });
 
     await daemon.run();
 
-    const firstPollDispatches = dispatches.filter((e) => e.type === "dispatch");
-    // Should dispatch at most 2 (max_concurrent_runs)
-    expect(firstPollDispatches.length).toBeLessThanOrEqual(2);
+    // First poll should dispatch at most 2 (max_concurrent_runs)
+    expect(firstPollDispatchCount).toBeLessThanOrEqual(2);
   });
 
   it("skips issues with exclude labels", async () => {
