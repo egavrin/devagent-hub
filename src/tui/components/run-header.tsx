@@ -108,7 +108,7 @@ export function RunHeader({ run, isActive, gateVerdicts, latestAgentRun }: RunHe
         <Text dimColor>Age: {formatAge(run.createdAt)}</Text>
       </Box>
 
-      {(run.runnerId || run.agentProfile || latestAgentRun?.executorKind) && (
+      {(run.runnerId || run.agentProfile || latestAgentRun?.executorKind || run.actualModel) && (
         <Box gap={2}>
           {run.agentProfile && <Text dimColor>Profile: {run.agentProfile}</Text>}
           {run.runnerId && <Text dimColor>Runner: {run.runnerId}</Text>}

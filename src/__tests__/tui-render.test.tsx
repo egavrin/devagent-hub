@@ -166,6 +166,39 @@ describe("RunHeader render", () => {
     expect(frame).toContain("triage");
     expect(frame).toContain("plan");
   });
+
+  it("shows urgent next-action hint for plan_draft", () => {
+    const { lastFrame } = render(
+      <RunHeader run={makeRun({ status: "plan_draft" })} isActive={false} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("approve");
+    expect(frame).toContain("rework");
+  });
+
+  it("shows executor role from latest agent run", () => {
+    const agentRun = makeAgentRun({ executorKind: "reviewer", profile: "strong" });
+    const { lastFrame } = render(
+      <RunHeader run={makeRun()} isActive={false} latestAgentRun={agentRun} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("Role:");
+    expect(frame).toContain("reviewer");
+  });
+
+  it("shows model when set", () => {
+    const { lastFrame } = render(
+      <RunHeader run={makeRun({ actualModel: "claude-opus-4-6" })} isActive={false} />,
+    );
+    expect(lastFrame()!).toContain("Model: claude-opus-4-6");
+  });
+
+  it("shows urgent hint for failed status", () => {
+    const { lastFrame } = render(
+      <RunHeader run={makeRun({ status: "failed" })} isActive={false} />,
+    );
+    expect(lastFrame()!).toContain("retry");
+  });
 });
 
 // ─── RunCard ────────────────────────────────────────────────
@@ -377,6 +410,29 @@ describe("ArtifactPane render", () => {
       <ArtifactPane artifacts={artifacts} approvals={approvals} isFocused={false} height={20} showDiff={false} />,
     );
     expect(lastFrame()!).toContain("Pending Approvals");
+  });
+
+  it("shows executor attribution on latest artifact", () => {
+    const artifacts = [makeArtifact({ agentRunId: "agent-1", summary: "Review completed" })];
+    const agentRunsList = [makeAgentRun({ id: "agent-1", executorKind: "reviewer", profile: "strong" })];
+    const { lastFrame } = render(
+      <ArtifactPane artifacts={artifacts} approvals={[]} agentRuns={agentRunsList} isFocused={false} height={20} showDiff={false} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain("reviewer");
+    expect(frame).toContain("@strong");
+  });
+
+  it("shows executor kind in history items", () => {
+    const artifacts = [
+      makeArtifact({ id: "art-old", agentRunId: "agent-1", type: "triage_report", summary: "Triaged" }),
+      makeArtifact({ id: "art-new", type: "plan_draft", summary: "Plan ready" }),
+    ];
+    const agentRunsList = [makeAgentRun({ id: "agent-1", executorKind: "executor" })];
+    const { lastFrame } = render(
+      <ArtifactPane artifacts={artifacts} approvals={[]} agentRuns={agentRunsList} isFocused={false} height={20} showDiff={false} />,
+    );
+    expect(lastFrame()!).toContain("[executor]");
   });
 });
 
