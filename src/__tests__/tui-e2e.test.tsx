@@ -156,7 +156,7 @@ describe("Rework dialog flow", () => {
 
 describe("Pane cycling", () => {
   it("NEXT_PANE cycles forward through all panes", () => {
-    let state = { ...initialUIState, focusedPane: "queue" as const };
+    let state: UIState = { ...initialUIState, focusedPane: "queue" };
 
     state = uiReducer(state, { type: "NEXT_PANE" });
     expect(state.focusedPane).toBe("artifact");
@@ -172,7 +172,7 @@ describe("Pane cycling", () => {
   });
 
   it("PREV_PANE cycles backward through all panes", () => {
-    let state = { ...initialUIState, focusedPane: "queue" as const };
+    let state: UIState = { ...initialUIState, focusedPane: "queue" };
 
     state = uiReducer(state, { type: "PREV_PANE" });
     expect(state.focusedPane).toBe("logs");
@@ -288,7 +288,7 @@ describe("Screen navigation", () => {
   });
 
   it("SET_SCREEN resets approval index", () => {
-    let state = { ...initialUIState, approvalIndex: 5 };
+    let state: UIState = { ...initialUIState, approvalIndex: 5 };
     state = uiReducer(state, { type: "SET_SCREEN", screen: "approvals" });
     expect(state.approvalIndex).toBe(0);
   });
