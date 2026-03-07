@@ -5,7 +5,7 @@ import { MockRunLauncher } from "../runner/mock-launcher.js";
 describe("LLMReviewGate", () => {
   it("returns proceed when review passes", async () => {
     const launcher = new MockRunLauncher();
-    launcher.setResponse("gate", {
+    launcher.setResponse("review", {
       exitCode: 0,
       output: { verdict: "pass", blockingCount: 0, summary: "Looks good." },
     });
@@ -23,7 +23,7 @@ describe("LLMReviewGate", () => {
 
   it("returns rework when review blocks", async () => {
     const launcher = new MockRunLauncher();
-    launcher.setResponse("gate", {
+    launcher.setResponse("review", {
       exitCode: 0,
       output: {
         verdict: "block",
@@ -47,7 +47,7 @@ describe("LLMReviewGate", () => {
 
   it("returns escalate when review crashes", async () => {
     const launcher = new MockRunLauncher();
-    launcher.setResponse("gate", { exitCode: 1, output: null });
+    launcher.setResponse("review", { exitCode: 1, output: null });
 
     const gate = new LLMReviewGate(launcher);
     const verdict = await gate.evaluate("triage", { summary: "OK" }, {
@@ -62,7 +62,7 @@ describe("LLMReviewGate", () => {
 
   it("passes gateReview flag and sourcePhase to launcher", async () => {
     const launcher = new MockRunLauncher();
-    launcher.setResponse("gate", {
+    launcher.setResponse("review", {
       exitCode: 0,
       output: { verdict: "pass", summary: "OK" },
     });
@@ -75,7 +75,7 @@ describe("LLMReviewGate", () => {
     });
 
     expect(launcher.launches).toHaveLength(1);
-    expect(launcher.launches[0].phase).toBe("gate");
+    expect(launcher.launches[0].phase).toBe("review");
     const input = launcher.launches[0].input as Record<string, unknown>;
     expect(input.sourcePhase).toBe("plan");
     expect(input.stageOutput).toEqual({ summary: "Plan details" });

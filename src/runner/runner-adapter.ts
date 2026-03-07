@@ -27,6 +27,7 @@ export interface LaunchParams {
 
 export interface RunnerCapabilities {
   version: string;
+  contractVersion?: number;
   supportedPhases: string[];
   availableProviders: string[];
   supportedApprovalModes: string[];

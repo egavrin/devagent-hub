@@ -240,7 +240,7 @@ describe("Command palette flow", () => {
       { type: "BACK" },
     ]);
     expect(state.dialog).toBeNull();
-    expect(state.screen).toBe("dashboard");
+    expect(state.screen).toBe("approvals");
   });
 
   it("BACK when dialog is open closes dialog, does not change screen", () => {
@@ -270,7 +270,7 @@ describe("Help dialog flow", () => {
       { type: "BACK" },
     ]);
     expect(state.dialog).toBeNull();
-    expect(state.screen).toBe("dashboard");
+    expect(state.screen).toBe("approvals");
   });
 });
 
@@ -304,9 +304,10 @@ describe("Screen navigation", () => {
   });
 
   it("BACK on dashboard is a no-op", () => {
-    const state = uiReducer(initialUIState, { type: "BACK" });
+    const onDashboard = uiReducer(initialUIState, { type: "SET_SCREEN", screen: "dashboard" });
+    const state = uiReducer(onDashboard, { type: "BACK" });
     expect(state.screen).toBe("dashboard");
-    expect(state).toEqual(initialUIState);
+    expect(state).toEqual(onDashboard);
   });
 });
 

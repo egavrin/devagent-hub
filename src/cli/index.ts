@@ -13,6 +13,7 @@ import {
   fixCICommand,
   artifactsCommand,
   autopilotCommand,
+  doctorCommand,
 } from "./commands.js";
 
 const [command, ...args] = process.argv.slice(2);
@@ -33,6 +34,7 @@ Commands:
   status <run-id>       Show workflow run details [--json]
   artifacts <run-id>    Show artifacts for a workflow run
   list                  List workflow runs [--json]
+  doctor                Check runner compatibility and report issues
   help                  Show this help
 
 Options:
@@ -74,6 +76,9 @@ switch (command) {
     break;
   case "list":
     listCommand(args);
+    break;
+  case "doctor":
+    doctorCommand(args);
     break;
   default:
     await uiCommand(command ? [command, ...args] : args);

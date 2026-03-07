@@ -1,43 +1,53 @@
 import type { WorkflowStatus } from "../state/types.js";
 
 const TRANSITIONS: Record<WorkflowStatus, WorkflowStatus[]> = {
-  new: ["triaged", "failed", "escalated"],
-  triaged: ["plan_draft", "failed", "escalated"],
-  plan_draft: ["plan_revision", "plan_accepted", "failed", "escalated"],
-  plan_revision: ["plan_draft", "plan_accepted", "failed", "escalated"],
-  plan_accepted: ["implementing", "failed", "escalated"],
-  implementing: ["awaiting_local_verify", "failed", "escalated"],
+  new: ["triaged", "failed", "escalated", "budget_exceeded"],
+  triaged: ["plan_draft", "failed", "escalated", "budget_exceeded"],
+  plan_draft: ["plan_revision", "plan_accepted", "failed", "escalated", "budget_exceeded"],
+  plan_revision: ["plan_draft", "plan_accepted", "failed", "escalated", "budget_exceeded"],
+  plan_accepted: ["implementing", "failed", "escalated", "budget_exceeded"],
+  implementing: ["awaiting_local_verify", "failed", "escalated", "budget_exceeded"],
   awaiting_local_verify: [
     "draft_pr_opened",
     "implementing",
     "failed",
     "escalated",
+    "budget_exceeded",
   ],
   draft_pr_opened: [
     "auto_review_fix_loop",
     "awaiting_human_review",
     "failed",
     "escalated",
+    "budget_exceeded",
   ],
   auto_review_fix_loop: [
     "draft_pr_opened",
     "awaiting_human_review",
     "failed",
     "escalated",
+    "budget_exceeded",
   ],
   awaiting_human_review: [
     "auto_review_fix_loop",
     "ready_to_merge",
     "failed",
     "escalated",
+    "budget_exceeded",
   ],
-  ready_to_merge: ["done", "failed", "escalated"],
+  ready_to_merge: ["done", "failed", "escalated", "budget_exceeded"],
   done: [],
   escalated: [],
   failed: [
     "new", "triaged", "plan_accepted", "implementing",
     "draft_pr_opened", "auto_review_fix_loop",
   ], // allow retry from any phase
+  budget_exceeded: ["needs_human_budget_override", "failed", "escalated"],
+  needs_human_budget_override: [
+    "new", "triaged", "plan_accepted", "implementing",
+    "draft_pr_opened", "auto_review_fix_loop",
+    "budget_exceeded", "failed", "escalated",
+  ],
 };
 
 const PHASE_MAP: Record<WorkflowStatus, string | null> = {
@@ -55,6 +65,8 @@ const PHASE_MAP: Record<WorkflowStatus, string | null> = {
   done: null,
   escalated: null,
   failed: null,
+  budget_exceeded: null,
+  needs_human_budget_override: null,
 };
 
 /**

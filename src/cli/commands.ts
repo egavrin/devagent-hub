@@ -12,6 +12,8 @@ import { LauncherFactory } from "../runner/launcher-factory.js";
 import { PhaseDispatchLauncher } from "../runner/phase-dispatch-launcher.js";
 import type { ProcessRegistry } from "../runner/process-registry.js";
 import { LLMReviewGate } from "../workflow/review-gate.js";
+import { validateRunnerCompat } from "../runner/launcher.js";
+import { RUNNER_CONTRACT_VERSION } from "../runner/protocol.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "devagent-hub");
 const DB_PATH = join(CONFIG_DIR, "state.db");
@@ -643,4 +645,67 @@ export function listCommand(args: string[] = []): void {
   } finally {
     store.close();
   }
+}
+
+export function doctorCommand(_args: string[] = []): void {
+  const repoRoot = detectRepoRoot();
+  const config = loadWorkflowConfig(repoRoot);
+
+  console.log(`\n  devagent-hub doctor`);
+  console.log(`  ${"─".repeat(60)}`);
+  console.log(`  Hub contract version: ${RUNNER_CONTRACT_VERSION}`);
+  console.log();
+
+  const factory = new LauncherFactory(config);
+  const descriptions = factory.describeRunners();
+
+  let allOk = true;
+
+  for (const [bin, desc] of descriptions) {
+    console.log(`  Runner: ${bin}`);
+    const result = validateRunnerCompat(desc);
+
+    if (result.compatible) {
+      console.log(`    Status: compatible`);
+    } else {
+      console.log(`    Status: INCOMPATIBLE`);
+      allOk = false;
+    }
+
+    if (desc) {
+      console.log(`    Version: ${desc.version}`);
+      console.log(`    Phases: ${desc.supportedPhases.join(", ")}`);
+      console.log(`    Approval modes: ${desc.supportedApprovalModes.join(", ") || "(none)"}`);
+      console.log(`    Reasoning levels: ${desc.supportedReasoningLevels.join(", ") || "(none)"}`);
+      console.log(`    Providers: ${desc.availableProviders.join(", ") || "(none)"}`);
+      if (desc.contractVersion !== undefined) {
+        console.log(`    Contract version: ${desc.contractVersion}`);
+      }
+    }
+
+    for (const w of result.warnings) {
+      console.log(`    [WARN] ${w}`);
+    }
+    for (const e of result.errors) {
+      console.log(`    [ERR]  ${e}`);
+    }
+
+    // Show flags that will be skipped
+    const skipped: string[] = [];
+    if (result.capabilities.reasoningLevels.length === 0) {
+      skipped.push("--reasoning");
+    }
+    if (skipped.length > 0) {
+      console.log(`    Skipped flags: ${skipped.join(", ")}`);
+    }
+
+    console.log();
+  }
+
+  if (allOk) {
+    console.log(`  All runners compatible.`);
+  } else {
+    console.log(`  Some runners have compatibility issues.`);
+  }
+  console.log();
 }

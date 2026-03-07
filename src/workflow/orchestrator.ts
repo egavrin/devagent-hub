@@ -13,8 +13,11 @@ import type {
   ReviewOutput,
   RepairOutput,
 } from "./stage-schemas.js";
+import type { RunnerRegistry, RegisteredRunner } from "../runner/runner-registry.js";
 import { defaultConfig } from "./config.js";
 import { resolveSkills } from "./skill-resolver.js";
+import { loadProjectBrief } from "./project-brief.js";
+import { seedBacklog } from "./backlog-seeder.js";
 import { execFileSync } from "node:child_process";
 
 export interface Finding {
@@ -69,6 +72,7 @@ export interface OrchestratorDeps {
   config?: WorkflowConfig;
   worktreeManager?: WorktreeManager;
   reviewGate?: ReviewGate;
+  runnerRegistry?: RunnerRegistry;
 }
 
 export class WorkflowOrchestrator {
@@ -80,6 +84,7 @@ export class WorkflowOrchestrator {
   private config: WorkflowConfig;
   private worktreeManager?: WorktreeManager;
   private reviewGate?: ReviewGate;
+  private runnerRegistry?: RunnerRegistry;
 
   constructor(deps: OrchestratorDeps) {
     this.store = deps.store;
@@ -90,10 +95,81 @@ export class WorkflowOrchestrator {
     this.config = deps.config ?? defaultConfig();
     this.worktreeManager = deps.worktreeManager;
     this.reviewGate = deps.reviewGate;
+    this.runnerRegistry = deps.runnerRegistry;
+  }
+
+  // ─── Dispatch & Multi-Runner Control ───────────────────────
+
+  /** Check whether we can dispatch another run without exceeding concurrency limits. */
+  private canDispatch(): boolean {
+    const busyCount = this.runnerRegistry?.getAll().filter(r => r.status === "busy").length ?? 0;
+    return busyCount < this.config.dispatch.max_concurrency;
+  }
+
+  /** Select the best available runner for a phase using the registry. */
+  private selectRunner(phase: string): RegisteredRunner | null {
+    if (!this.runnerRegistry) return null;
+    return this.runnerRegistry.getBestForPhase(phase);
+  }
+
+  /**
+   * Dispatch a workflow run to a runner. Checks concurrency, selects a runner,
+   * and marks it busy. Returns the assigned runner and the current phase.
+   */
+  async dispatch(runId: string): Promise<{ runner: RegisteredRunner; phase: string }> {
+    if (!this.runnerRegistry) {
+      throw new Error("Cannot dispatch: no runner registry configured");
+    }
+
+    if (!this.canDispatch()) {
+      throw new Error(
+        `Cannot dispatch: concurrency limit reached (${this.config.dispatch.max_concurrency})`,
+      );
+    }
+
+    const run = this.store.getWorkflowRun(runId);
+    if (!run) {
+      throw new Error(`Cannot dispatch: workflow run ${runId} not found`);
+    }
+
+    const phase = run.currentPhase ?? "triage";
+    const runner = this.selectRunner(phase);
+    if (!runner) {
+      throw new Error(`Cannot dispatch: no runners available for phase "${phase}"`);
+    }
+
+    this.runnerRegistry.markBusy(runner.id, runId);
+    this.store.updateWorkflowRun(runId, { runnerId: runner.id });
+
+    return { runner, phase };
   }
 
   private get isWatchMode(): boolean {
     return (this.config.mode === "watch" || this.config.mode === "autopilot") && this.reviewGate !== undefined;
+  }
+
+  /** Determine triggeredBy based on the current workflow mode. */
+  private get triggeredBy(): "human" | "policy" | "autopilot" {
+    if (this.config.mode === "autopilot") return "autopilot";
+    if (this.config.mode === "watch") return "policy";
+    return "human";
+  }
+
+  /** Request the workflow to be cancelled. */
+  requestCancel(runId: string): void {
+    const run = this.store.getWorkflowRun(runId);
+    if (!run) return;
+    this.store.updateWorkflowRun(runId, {
+      metadata: { ...run.metadata, cancelRequested: true },
+    });
+    process.stderr.write(`[orchestrator] Cancel requested for run ${runId.slice(0, 8)}\n`);
+  }
+
+  private checkCancel(runId: string): boolean {
+    const run = this.store.getWorkflowRun(runId);
+    if (!run?.metadata?.cancelRequested) return false;
+    this.store.updateStatus(runId, "failed", "Cancelled by user");
+    return true;
   }
 
   /** Request the workflow to pause after the current phase completes. */
@@ -114,6 +190,36 @@ export class WorkflowOrchestrator {
     this.store.updateWorkflowRun(runId, { metadata: rest });
     process.stderr.write(`[orchestrator] Run ${runId.slice(0, 8)} paused between phases\n`);
     return true;
+  }
+
+  /** Check budget limits for a run. Returns exceeded status and reason. */
+  private checkBudget(runId: string): { exceeded: boolean; reason?: string } {
+    const run = this.store.getWorkflowRun(runId);
+    if (!run) return { exceeded: false };
+
+    // Check run wall time
+    const elapsed = Date.now() - new Date(run.createdAt).getTime();
+    const maxMs = this.config.budget.run_wall_time_minutes * 60_000;
+    if (elapsed > maxMs) return { exceeded: true, reason: "Run wall time exceeded" };
+
+    // Check iteration count
+    const agentRuns = this.store.getAgentRunsByWorkflow(runId);
+    if (agentRuns.length >= this.config.budget.run_max_iterations) {
+      return { exceeded: true, reason: "Max iterations exceeded" };
+    }
+
+    return { exceeded: false };
+  }
+
+  /** Get a complete artifact chain for a workflow run (audit trail). */
+  getArtifactChain(runId: string): { phase: string; type: string; verdict?: string; timestamp: string }[] {
+    const artifacts = this.store.getArtifactsByWorkflow(runId);
+    return artifacts.map((a) => ({
+      phase: a.phase,
+      type: a.type,
+      verdict: a.verdict ?? (a.type === "gate_verdict" ? (a.data.action as string) : undefined),
+      timestamp: a.createdAt,
+    }));
   }
 
   /**
@@ -181,7 +287,7 @@ export class WorkflowOrchestrator {
       workflowRunId: workflowRun.id,
       phase: "triage",
       executorKind: "executor",
-      triggeredBy: "human",
+      triggeredBy: this.triggeredBy,
     });
     this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "triage" });
 
@@ -246,7 +352,7 @@ export class WorkflowOrchestrator {
       workflowRunId: workflowRun.id,
       phase: "triage",
       executorKind: "executor",
-      triggeredBy: "human",
+      triggeredBy: this.triggeredBy,
     });
     this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "triage" });
 
@@ -325,7 +431,7 @@ export class WorkflowOrchestrator {
       workflowRunId: workflowRun.id,
       phase: "plan",
       executorKind: "executor",
-      triggeredBy: "human",
+      triggeredBy: this.triggeredBy,
     });
     this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "plan" });
 
@@ -496,7 +602,7 @@ export class WorkflowOrchestrator {
       workflowRunId: workflowRun.id,
       phase: "implement",
       executorKind: "executor",
-      triggeredBy: "human",
+      triggeredBy: this.triggeredBy,
     });
 
     const planData = acceptedPlan?.data ?? {};
@@ -564,7 +670,7 @@ export class WorkflowOrchestrator {
       workflowRunId: workflowRun.id,
       phase: "verify",
       executorKind: "executor",
-      triggeredBy: "human",
+      triggeredBy: this.triggeredBy,
     });
     this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "verify" });
 
@@ -690,7 +796,7 @@ export class WorkflowOrchestrator {
       workflowRunId: wfRun.id,
       phase: "review",
       executorKind: "reviewer",
-      triggeredBy: "human",
+      triggeredBy: this.triggeredBy,
     });
     this.store.updateWorkflowRun(wfRun.id, { currentPhase: "review" });
 
@@ -777,7 +883,7 @@ export class WorkflowOrchestrator {
       workflowRunId: wfRun.id,
       phase: "repair",
       executorKind: "repairer",
-      triggeredBy: "human",
+      triggeredBy: this.triggeredBy,
     });
     this.store.updateWorkflowRun(wfRun.id, { currentPhase: "repair" });
 
@@ -1183,6 +1289,13 @@ export class WorkflowOrchestrator {
     // Phase 1: Triage + gate
     let run = await this.triage(issueNumber);
     if (run.status === "failed") return run;
+    if (this.checkCancel(run.id)) return this.store.getWorkflowRun(run.id)!;
+
+    const budgetCheck1 = this.checkBudget(run.id);
+    if (budgetCheck1.exceeded) {
+      this.store.updateStatus(run.id, "budget_exceeded", budgetCheck1.reason!);
+      return this.store.getWorkflowRun(run.id)!;
+    }
 
     const triageOutput = this.store.getLatestArtifact(run.id, "triage_report");
     const triageVerdict = await this.runGate("triage", triageOutput?.data ?? {}, run.id, issueNumber);
@@ -1196,8 +1309,15 @@ export class WorkflowOrchestrator {
     }
 
     if (this.checkPause(run.id)) return this.store.getWorkflowRun(run.id)!;
+    if (this.checkCancel(run.id)) return this.store.getWorkflowRun(run.id)!;
 
     // Phase 2: Plan + gate (with rework loop)
+    const budgetCheck2 = this.checkBudget(run.id);
+    if (budgetCheck2.exceeded) {
+      this.store.updateStatus(run.id, "budget_exceeded", budgetCheck2.reason!);
+      return this.store.getWorkflowRun(run.id)!;
+    }
+
     for (let attempt = 0; attempt <= maxGateReworks; attempt++) {
       run = await this.plan(issueNumber);
       if (run.status === "failed") return run;
@@ -1230,8 +1350,15 @@ export class WorkflowOrchestrator {
 
     if (run.status !== "plan_accepted") return run;
     if (this.checkPause(run.id)) return this.store.getWorkflowRun(run.id)!;
+    if (this.checkCancel(run.id)) return this.store.getWorkflowRun(run.id)!;
 
     // Phase 3: Implement + gate
+    const budgetCheck3 = this.checkBudget(run.id);
+    if (budgetCheck3.exceeded) {
+      this.store.updateStatus(run.id, "budget_exceeded", budgetCheck3.reason!);
+      return this.store.getWorkflowRun(run.id)!;
+    }
+
     run = await this.implement(issueNumber);
     if (run.status === "failed") return run;
 
@@ -1262,10 +1389,28 @@ export class WorkflowOrchestrator {
     }
 
     if (this.checkPause(run.id)) return this.store.getWorkflowRun(run.id)!;
+    if (this.checkCancel(run.id)) return this.store.getWorkflowRun(run.id)!;
 
-    // Phase 4: Verify
+    // Phase 4: Verify + gate
+    const budgetCheck4 = this.checkBudget(run.id);
+    if (budgetCheck4.exceeded) {
+      this.store.updateStatus(run.id, "budget_exceeded", budgetCheck4.reason!);
+      return this.store.getWorkflowRun(run.id)!;
+    }
+
     run = await this.verify(issueNumber);
     if (run.status === "failed") return run;
+
+    const verifyOutput = this.store.getLatestArtifact(run.id, "verification_report");
+    const verifyVerdict = await this.runGate("verify", verifyOutput?.data ?? {}, run.id, issueNumber, implWorkDir);
+    if (verifyVerdict.action !== "proceed") {
+      this.store.updateStatus(run.id, "escalated", verifyVerdict.reason);
+      await safeGitHub(() => this.github.addComment(
+        this.repo, issueNumber,
+        `**Gate: verification rejected.** ${verifyVerdict.reason}`,
+      ), undefined);
+      return this.store.getWorkflowRun(run.id)!;
+    }
 
     // Phase 5: Open PR
     if (run.status === "awaiting_local_verify") {
@@ -1274,6 +1419,7 @@ export class WorkflowOrchestrator {
     }
 
     if (this.checkPause(run.id)) return this.store.getWorkflowRun(run.id)!;
+    if (this.checkCancel(run.id)) return this.store.getWorkflowRun(run.id)!;
 
     // Phase 6: Wait for CI, fix failures if any
     run = await this.waitForCIAndFix(issueNumber, run);
@@ -1324,5 +1470,36 @@ export class WorkflowOrchestrator {
     }
 
     this.store.updateStatus(workflowRun.id, "plan_revision", reason);
+  }
+
+  /**
+   * Bootstrap a project from a brief markdown file.
+   * Parses the brief, seeds backlog items, and stores a bootstrap artifact.
+   */
+  async bootstrapFromBrief(briefPath: string): Promise<WorkflowRun> {
+    const brief = loadProjectBrief(briefPath);
+    const items = seedBacklog(brief);
+
+    // Create a parent workflow run for the bootstrap
+    const workflowRun = this.store.createWorkflowRun({
+      issueNumber: 0,
+      issueUrl: "",
+      repo: this.repo,
+      sourceType: "project-brief",
+      sourceRef: briefPath,
+      metadata: { title: brief.name, briefName: brief.name, itemCount: items.length },
+    });
+
+    // Store bootstrap artifact with the full plan
+    this.store.createArtifact({
+      workflowRunId: workflowRun.id,
+      type: "bootstrap_report",
+      phase: "triage",
+      summary: `Bootstrap: ${brief.name} — ${items.length} work items`,
+      data: { brief, items } as unknown as Record<string, unknown>,
+    });
+
+    this.store.updateStatus(workflowRun.id, "triaged", "Bootstrap plan created");
+    return this.store.getWorkflowRun(workflowRun.id)!;
   }
 }

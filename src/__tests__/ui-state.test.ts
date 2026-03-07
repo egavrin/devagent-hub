@@ -10,8 +10,8 @@ describe("uiReducer", () => {
   // ─── Screen navigation ─────────────────────────────────────
 
   describe("screen navigation", () => {
-    it("starts on dashboard", () => {
-      expect(initialUIState.screen).toBe("dashboard");
+    it("starts on approvals", () => {
+      expect(initialUIState.screen).toBe("approvals");
       expect(initialUIState.focusedPane).toBe("queue");
     });
 
@@ -54,8 +54,9 @@ describe("uiReducer", () => {
     });
 
     it("BACK on dashboard is a no-op", () => {
-      const s = dispatch(initialUIState, { type: "BACK" });
-      expect(s).toEqual(initialUIState);
+      const onDashboard = dispatch(initialUIState, { type: "SET_SCREEN", screen: "dashboard" });
+      const s = dispatch(onDashboard, { type: "BACK" });
+      expect(s).toEqual(onDashboard);
     });
   });
 
@@ -165,6 +166,11 @@ describe("uiReducer", () => {
     it("SET_NEW_RUN_MODEL changes model", () => {
       const s = dispatch(initialUIState, { type: "SET_NEW_RUN_MODEL", model: "opus" });
       expect(s.newRunForm.model).toBe("opus");
+    });
+
+    it("SET_NEW_RUN_SOURCE_TYPE supports project-brief", () => {
+      const s = dispatch(initialUIState, { type: "SET_NEW_RUN_SOURCE_TYPE", sourceType: "project-brief" });
+      expect(s.newRunForm.sourceType).toBe("project-brief");
     });
 
     it("SET_NEW_RUN_MODE supports autopilot-once", () => {
@@ -376,7 +382,7 @@ describe("uiReducer", () => {
       // Cancel — Esc (BACK)
       s = dispatch(s, { type: "BACK" });
       expect(s.dialog).toBeNull();
-      expect(s.screen).toBe("dashboard");
+      expect(s.screen).toBe("approvals");
     });
 
     it("approvals -> open run -> back -> back to dashboard", () => {

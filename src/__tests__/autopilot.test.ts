@@ -79,7 +79,7 @@ describe("AutopilotDaemon", () => {
     launcher.setResponse("implement", { exitCode: 0, output: { summary: "Done" } });
     launcher.setResponse("verify", { exitCode: 0, output: { summary: "Pass", passed: true } });
     launcher.setResponse("review", { exitCode: 0, output: { verdict: "pass", blockingCount: 0, summary: "Clean" } });
-    launcher.setResponse("gate", { exitCode: 0, output: { verdict: "pass", blockingCount: 0, summary: "Gate OK" } });
+
 
     const events: AutopilotEvent[] = [];
     const controller = new AbortController();
@@ -114,7 +114,7 @@ describe("AutopilotDaemon", () => {
     launcher.setResponse("implement", { exitCode: 0, output: { summary: "Done" } });
     launcher.setResponse("verify", { exitCode: 0, output: { summary: "Pass" } });
     launcher.setResponse("review", { exitCode: 0, output: { verdict: "pass", blockingCount: 0, summary: "Clean" } });
-    launcher.setResponse("gate", { exitCode: 0, output: { verdict: "pass", blockingCount: 0, summary: "Gate OK" } });
+
 
     let firstPollDispatchCount = 0;
     let firstPollSeen = false;
@@ -147,7 +147,7 @@ describe("AutopilotDaemon", () => {
     launcher.setResponse("implement", { exitCode: 0, output: { summary: "Done" } });
     launcher.setResponse("verify", { exitCode: 0, output: { summary: "Pass" } });
     launcher.setResponse("review", { exitCode: 0, output: { verdict: "pass", blockingCount: 0, summary: "Clean" } });
-    launcher.setResponse("gate", { exitCode: 0, output: { verdict: "pass", blockingCount: 0, summary: "Gate OK" } });
+
 
     const events: AutopilotEvent[] = [];
     const controller = new AbortController();
@@ -180,7 +180,7 @@ describe("AutopilotDaemon", () => {
     launcher.setResponse("implement", { exitCode: 0, output: { summary: "Done" } });
     launcher.setResponse("verify", { exitCode: 0, output: { summary: "Pass" } });
     launcher.setResponse("review", { exitCode: 0, output: { verdict: "pass", blockingCount: 0, summary: "Clean" } });
-    launcher.setResponse("gate", { exitCode: 0, output: { verdict: "pass", blockingCount: 0, summary: "Gate OK" } });
+
 
     // Only allow 1 concurrent to see which is dispatched first
     config.autopilot.max_concurrent_runs = 1;

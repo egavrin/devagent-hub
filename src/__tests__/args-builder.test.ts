@@ -75,6 +75,7 @@ describe("buildLaunchArgs", () => {
       maxIterations: 20,
       approvalMode: "full-auto",
       reasoning: "high",
+      supportedReasoningLevels: ["low", "medium", "high", "xhigh"],
     });
 
     expect(args).toContain("--provider");
@@ -83,16 +84,16 @@ describe("buildLaunchArgs", () => {
     expect(args).toContain("claude-sonnet-4-6");
     expect(args).toContain("--max-iterations");
     expect(args).toContain("20");
-    expect(args).toContain("--approval-mode");
+    expect(args).toContain("--approval");
     expect(args).toContain("full-auto");
     expect(args).toContain("--reasoning");
     expect(args).toContain("high");
   });
 
-  it("uses --approval-mode not --approval", () => {
+  it("uses --approval not --approval-mode", () => {
     const args = buildLaunchArgs(baseParams, { approvalMode: "suggest" });
-    expect(args).toContain("--approval-mode");
-    expect(args).not.toContain("--approval");
+    expect(args).toContain("--approval");
+    expect(args).not.toContain("--approval-mode");
   });
 
   it("converts maxIterations=0 to 999999", () => {

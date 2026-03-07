@@ -7,7 +7,7 @@
 // ─── Valid values (must match DevAgent's workflow-contract.ts) ────
 
 const VALID_PHASES = new Set([
-  "triage", "plan", "implement", "verify", "review", "repair", "gate",
+  "triage", "plan", "implement", "verify", "review", "repair",
 ]);
 
 const VALID_APPROVAL_MODES = new Set([
@@ -34,6 +34,8 @@ export interface LaunchOptions {
   maxIterations?: number;
   approvalMode?: string;
   reasoning?: string;
+  /** Runner-reported supported reasoning levels; if empty/undefined, --reasoning is skipped. */
+  supportedReasoningLevels?: string[];
 }
 
 export class InvalidLaunchConfigError extends Error {
@@ -113,10 +115,14 @@ export function buildLaunchArgs(
     }
   }
   if (options.approvalMode) {
-    args.push("--approval-mode", options.approvalMode);
+    args.push("--approval", options.approvalMode);
   }
+  // Only emit --reasoning when the runner advertises reasoning support
   if (options.reasoning) {
-    args.push("--reasoning", options.reasoning);
+    const supported = options.supportedReasoningLevels;
+    if (supported && supported.length > 0) {
+      args.push("--reasoning", options.reasoning);
+    }
   }
 
   return args;

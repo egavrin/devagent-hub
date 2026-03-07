@@ -6,7 +6,7 @@
 // ─── Phase Names ─────────────────────────────────────────────
 
 export const WORKFLOW_PHASES = [
-  "triage", "plan", "implement", "verify", "review", "repair", "gate",
+  "triage", "plan", "implement", "verify", "review", "repair",
 ] as const;
 
 export type WorkflowPhase = (typeof WORKFLOW_PHASES)[number];
@@ -147,6 +147,7 @@ export interface ReviewFinding {
 
 export interface RunnerDescription {
   version: string;
+  contractVersion?: number;
   supportedPhases: string[];
   availableProviders: string[];
   supportedApprovalModes: string[];

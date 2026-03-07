@@ -6,7 +6,7 @@ export type LogMode = "structured" | "raw" | "errors";
 
 export type Dialog = null | "new-run" | "rework" | "command-palette" | "help" | "rerun";
 
-export type NewRunSourceType = "issue" | "pr";
+export type NewRunSourceType = "issue" | "pr" | "project-brief";
 export type NewRunMode = "assisted" | "watch" | "autopilot-once";
 
 export type GateStrictness = "normal" | "strict" | "lenient";
@@ -82,7 +82,7 @@ export type UIAction =
 const PANE_ORDER: FocusPane[] = ["queue", "artifact", "timeline", "logs"];
 
 export const initialUIState: UIState = {
-  screen: "dashboard",
+  screen: "approvals",
   focusedPane: "queue",
   selectedRunId: null,
   logMode: "structured",

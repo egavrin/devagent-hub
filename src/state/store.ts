@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   worktree_path TEXT,
   current_phase TEXT,
   repair_round INTEGER NOT NULL DEFAULT 0,
+  source_ref TEXT,
   requested_model TEXT,
   actual_provider TEXT,
   actual_model TEXT,
@@ -126,6 +127,7 @@ interface WorkflowRunRow {
   worktree_path: string | null;
   current_phase: string | null;
   repair_round: number;
+  source_ref: string | null;
   requested_model: string | null;
   actual_provider: string | null;
   actual_model: string | null;
@@ -249,6 +251,7 @@ function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
     worktreePath: row.worktree_path,
     currentPhase: row.current_phase,
     repairRound: row.repair_round,
+    sourceRef: row.source_ref ?? null,
     requestedModel: row.requested_model ?? null,
     actualProvider: row.actual_provider ?? null,
     actualModel: row.actual_model ?? null,
@@ -323,6 +326,9 @@ export class StateStore {
     if (!colNames.has("actual_model")) {
       this.db.exec("ALTER TABLE workflow_runs ADD COLUMN actual_model TEXT");
     }
+    if (!colNames.has("source_ref")) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN source_ref TEXT");
+    }
 
     // Add new columns to agent_runs if missing
     const arCols = this.db.prepare("PRAGMA table_info(agent_runs)").all() as Array<{ name: string }>;
@@ -391,6 +397,7 @@ export class StateStore {
     repo: string;
     sourceType?: SourceType;
     mode?: WorkflowMode;
+    sourceRef?: string | null;
     metadata?: Record<string, unknown>;
   }): WorkflowRun {
     const id = crypto.randomUUID();
@@ -398,13 +405,14 @@ export class StateStore {
     const metadata = JSON.stringify(opts.metadata ?? {});
     const sourceType = opts.sourceType ?? "issue";
     const mode = opts.mode ?? "assisted";
+    const sourceRef = opts.sourceRef ?? null;
 
     this.db
       .prepare(
-        `INSERT INTO workflow_runs (id, issue_number, issue_url, repo, status, source_type, mode, repair_round, created_at, updated_at, metadata)
-         VALUES (?, ?, ?, ?, 'new', ?, ?, 0, ?, ?, ?)`
+        `INSERT INTO workflow_runs (id, issue_number, issue_url, repo, status, source_type, mode, source_ref, repair_round, created_at, updated_at, metadata)
+         VALUES (?, ?, ?, ?, 'new', ?, ?, ?, 0, ?, ?, ?)`
       )
-      .run(id, opts.issueNumber, opts.issueUrl, opts.repo, sourceType, mode, now, now, metadata);
+      .run(id, opts.issueNumber, opts.issueUrl, opts.repo, sourceType, mode, sourceRef, now, now, metadata);
 
     return this.getWorkflowRun(id)!;
   }
@@ -476,6 +484,7 @@ export class StateStore {
         | "agentProfile"
         | "blockedReason"
         | "nextAction"
+        | "sourceRef"
         | "requestedModel"
         | "actualProvider"
         | "actualModel"
@@ -534,6 +543,10 @@ export class StateStore {
     if (fields.nextAction !== undefined) {
       sets.push("next_action = ?");
       values.push(fields.nextAction);
+    }
+    if (fields.sourceRef !== undefined) {
+      sets.push("source_ref = ?");
+      values.push(fields.sourceRef);
     }
     if (fields.requestedModel !== undefined) {
       sets.push("requested_model = ?");

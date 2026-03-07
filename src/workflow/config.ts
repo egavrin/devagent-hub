@@ -89,6 +89,16 @@ export interface WorkflowConfig {
     /** Max files changed before escalating for human review. */
     max_changed_files: number;
   };
+  budget: {
+    stage_wall_time_minutes: number;
+    run_wall_time_minutes: number;
+    run_max_cost_usd: number;
+    run_max_iterations: number;
+    run_max_changed_files: number;
+    repo_max_cost_usd: number;
+    session_max_cost_usd: number;
+    max_unresolved_escalations: number;
+  };
 }
 
 export function defaultConfig(): WorkflowConfig {
@@ -133,6 +143,16 @@ export function defaultConfig(): WorkflowConfig {
       max_complexity: "medium",
       min_gate_confidence: 0.7,
       max_changed_files: 20,
+    },
+    budget: {
+      stage_wall_time_minutes: 60,
+      run_wall_time_minutes: 240,
+      run_max_cost_usd: 10,
+      run_max_iterations: 100,
+      run_max_changed_files: 30,
+      repo_max_cost_usd: 50,
+      session_max_cost_usd: 100,
+      max_unresolved_escalations: 3,
     },
   };
 }

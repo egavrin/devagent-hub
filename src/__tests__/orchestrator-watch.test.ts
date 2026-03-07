@@ -74,22 +74,24 @@ describe("WorkflowOrchestrator — watch mode", () => {
     gate.setVerdict("triage", { action: "proceed", reason: "Triage OK" });
     gate.setVerdict("plan", { action: "proceed", reason: "Plan OK" });
     gate.setVerdict("implement", { action: "proceed", reason: "Impl OK" });
+    gate.setVerdict("verify", { action: "proceed", reason: "Verify OK" });
 
     const run = await orchestrator.runWorkflow(200);
 
     // In watch mode, should proceed all the way through to done (auto-ready PR)
     expect(run.status).toBe("done");
 
-    // Gate should have been called for triage, plan, and implement
+    // Gate should have been called for triage, plan, implement, and verify
     const gatePhases = gate.calls.map((c) => c.phase);
     expect(gatePhases).toContain("triage");
     expect(gatePhases).toContain("plan");
     expect(gatePhases).toContain("implement");
+    expect(gatePhases).toContain("verify");
 
     // Should have gate_verdict artifacts
     const artifacts = store.getArtifactsByWorkflow(run.id);
     const gateArtifacts = artifacts.filter((a) => a.type === "gate_verdict");
-    expect(gateArtifacts.length).toBe(3);
+    expect(gateArtifacts.length).toBe(4);
   });
 
   it("stops and escalates when triage gate rejects", async () => {
@@ -180,6 +182,89 @@ describe("WorkflowOrchestrator — watch mode", () => {
     const run = await orchestrator.runWorkflow(204);
 
     expect(run.status).toBe("escalated");
+  });
+
+  it("verify gate blocks when verdict is rework", async () => {
+    github.seedIssue("org/repo", makeIssue(206));
+    launcher.setResponse("triage", { exitCode: 0, output: { summary: "OK" } });
+    launcher.setResponse("plan", { exitCode: 0, output: { summary: "Plan" } });
+    launcher.setResponse("implement", { exitCode: 0, output: { summary: "Done" } });
+    launcher.setResponse("verify", {
+      exitCode: 0,
+      output: { result: { allPassed: false }, summary: "Tests failing" },
+    });
+
+    gate.setVerdict("triage", { action: "proceed", reason: "OK" });
+    gate.setVerdict("plan", { action: "proceed", reason: "OK" });
+    gate.setVerdict("implement", { action: "proceed", reason: "OK" });
+    gate.setVerdict("verify", { action: "rework", reason: "Tests are failing, needs fixes" });
+
+    const run = await orchestrator.runWorkflow(206);
+
+    // Verify gate rework should escalate (no rework loop for verify)
+    expect(run.status).toBe("escalated");
+
+    // PR should NOT have been opened
+    expect(run.prNumber).toBeNull();
+
+    // Verify gate should have been called
+    const gatePhases = gate.calls.map((c) => c.phase);
+    expect(gatePhases).toContain("verify");
+
+    // Should have a verify gate_verdict artifact
+    const artifacts = store.getArtifactsByWorkflow(run.id);
+    const verifyGate = artifacts.find((a) => a.type === "gate_verdict" && a.phase === "verify");
+    expect(verifyGate).toBeDefined();
+    expect(verifyGate!.summary).toContain("Tests are failing");
+  });
+
+  it("cancel request stops workflow", async () => {
+    github.seedIssue("org/repo", makeIssue(207));
+    launcher.setResponse("triage", { exitCode: 0, output: { summary: "OK" } });
+    launcher.setResponse("plan", { exitCode: 0, output: { summary: "Plan" } });
+
+    // After triage gate, request cancellation so it stops before plan
+    const origEvaluate = gate.evaluate.bind(gate);
+    gate.evaluate = async (phase: string, output: Record<string, unknown>, context: GateContext) => {
+      const result = await origEvaluate(phase, output, context);
+      if (phase === "triage") {
+        // Request cancel right after triage gate evaluates
+        orchestrator.requestCancel(context.workflowRunId);
+      }
+      return result;
+    };
+
+    gate.setVerdict("triage", { action: "proceed", reason: "OK" });
+
+    const run = await orchestrator.runWorkflow(207);
+
+    // Should have been cancelled (failed status with cancel reason)
+    expect(run.status).toBe("failed");
+  });
+
+  it("budget exceeded stops workflow", async () => {
+    // Create orchestrator with very tight budget (0 minutes wall time)
+    const tightConfig = {
+      ...defaultConfig(),
+      mode: "watch" as const,
+      budget: {
+        ...defaultConfig().budget,
+        run_wall_time_minutes: 0, // immediately exceeded
+      },
+    };
+    const tightOrchestrator = new WorkflowOrchestrator({
+      store, github, launcher, repo: "org/repo", config: tightConfig, reviewGate: gate,
+    });
+
+    github.seedIssue("org/repo", makeIssue(208));
+    launcher.setResponse("triage", { exitCode: 0, output: { summary: "OK" } });
+
+    gate.setVerdict("triage", { action: "proceed", reason: "OK" });
+
+    const run = await tightOrchestrator.runWorkflow(208);
+
+    // Should be budget_exceeded since wall time is 0 minutes
+    expect(run.status).toBe("budget_exceeded");
   });
 
   it("does not use gates in assisted mode", async () => {

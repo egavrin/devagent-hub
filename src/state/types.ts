@@ -2,9 +2,10 @@ export type WorkflowStatus =
   | "new" | "triaged" | "plan_draft" | "plan_revision" | "plan_accepted"
   | "implementing" | "awaiting_local_verify" | "draft_pr_opened"
   | "auto_review_fix_loop" | "awaiting_human_review" | "ready_to_merge"
-  | "done" | "escalated" | "failed";
+  | "done" | "escalated" | "failed"
+  | "budget_exceeded" | "needs_human_budget_override";
 
-export type SourceType = "issue" | "pr";
+export type SourceType = "issue" | "pr" | "project-brief";
 export type WorkflowMode = "assisted" | "watch" | "autopilot";
 
 export interface WorkflowRun {
@@ -25,6 +26,7 @@ export interface WorkflowRun {
   worktreePath: string | null;
   currentPhase: string | null;
   repairRound: number;
+  sourceRef: string | null;
   requestedModel: string | null;
   actualProvider: string | null;
   actualModel: string | null;
@@ -73,7 +75,14 @@ export type ArtifactType =
   | "repair_report"
   | "gate_verdict"
   | "diff_summary"
-  | "stderr";
+  | "stderr"
+  | "bootstrap_report"
+  | "triage_review"
+  | "plan_review"
+  | "implementation_review"
+  | "verification_review"
+  | "pr_review"
+  | "repair_review";
 
 export interface Artifact {
   id: string;

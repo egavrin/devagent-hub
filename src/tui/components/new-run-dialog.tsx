@@ -64,11 +64,18 @@ export function NewRunDialog({
         >
           [2] PR
         </Text>
+        <Text
+          bold={form.sourceType === "project-brief"}
+          color={form.sourceType === "project-brief" ? "green" : "gray"}
+          underline={form.sourceType === "project-brief"}
+        >
+          [3] Brief
+        </Text>
       </Box>
 
       {/* Source ID */}
       <Box marginTop={1}>
-        <Text>{form.sourceType === "issue" ? "Issue" : "PR"} #: </Text>
+        <Text>{form.sourceType === "project-brief" ? "Brief path" : form.sourceType === "issue" ? "Issue" : "PR"}{form.sourceType === "project-brief" ? ": " : " #: "}</Text>
         <TextInput
           value={form.sourceId}
           onChange={onChangeSourceId}
@@ -84,21 +91,21 @@ export function NewRunDialog({
           color={form.mode === "assisted" ? "cyan" : "gray"}
           underline={form.mode === "assisted"}
         >
-          [3] Assisted
+          [4] Assisted
         </Text>
         <Text
           bold={form.mode === "watch"}
           color={form.mode === "watch" ? "cyan" : "gray"}
           underline={form.mode === "watch"}
         >
-          [4] Watch
+          [5] Watch
         </Text>
         <Text
           bold={form.mode === "autopilot-once"}
           color={form.mode === "autopilot-once" ? "red" : "gray"}
           underline={form.mode === "autopilot-once"}
         >
-          [5] Auto-once
+          [6] Auto-once
         </Text>
       </Box>
 
@@ -114,7 +121,7 @@ export function NewRunDialog({
             [0] default
           </Text>
           {visibleProfiles.map((name, i) => {
-            const key = 6 + i;
+            const key = 7 + i;
             const selected = form.profile === name;
             return (
               <Text

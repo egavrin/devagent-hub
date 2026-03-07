@@ -41,6 +41,7 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     nextAction: null,
     requestedModel: null,
     actualProvider: null,
+    sourceRef: null,
     actualModel: null,
     ...overrides,
   };
@@ -674,13 +675,14 @@ describe("NewRunDialog render", () => {
   const noop = () => {};
   const baseForm = { sourceType: "issue" as const, sourceId: "", mode: "assisted" as const, profile: "", runner: "", model: "", gateStrictness: "normal" as const, priority: "normal" as const };
 
-  it("renders source type options", () => {
+  it("renders source type options including Brief", () => {
     const { lastFrame } = render(
       <NewRunDialog form={baseForm} profiles={[]} runners={[]} onChangeSourceType={noop} onChangeSourceId={noop} onChangeMode={noop} onChangeProfile={noop} onChangeRunner={noop} onChangeModel={noop} onChangeGateStrictness={noop} onChangePriority={noop} onSubmit={noop} onCancel={noop} />,
     );
     const frame = lastFrame()!;
     expect(frame).toContain("Issue");
     expect(frame).toContain("PR");
+    expect(frame).toContain("Brief");
   });
 
   it("renders mode options including autopilot-once", () => {

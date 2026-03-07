@@ -4,6 +4,8 @@ import { join } from "path";
 import { buildLaunchArgs } from "./args-builder.js";
 import type { LaunchOptions } from "./args-builder.js";
 import type { RunnerDescription } from "../workflow/stage-schemas.js";
+import type { RunnerProtocol, RunnerCompatResult } from "./protocol.js";
+import { RUNNER_CONTRACT_VERSION } from "./protocol.js";
 
 export interface LaunchResult {
   exitCode: number;
@@ -23,21 +25,120 @@ export interface LauncherConfig {
   reasoning?: string;
 }
 
+/** Cache for describeRunner results — avoids calling the runner multiple times. */
+const describeRunnerCache = new Map<string, RunnerDescription | null>();
+
 /**
  * Query the runner for its capabilities via `devagent workflow describe`.
  * Returns null if the runner doesn't support the command.
+ * Results are cached per bin string.
  */
 export function describeRunner(bin: string): RunnerDescription | null {
+  if (describeRunnerCache.has(bin)) {
+    return describeRunnerCache.get(bin)!;
+  }
+
   const binParts = bin.split(/\s+/);
+  let result: RunnerDescription | null = null;
   try {
     const raw = execFileSync(binParts[0], [...binParts.slice(1), "workflow", "describe"], {
       encoding: "utf-8",
       timeout: 10_000,
     });
-    return JSON.parse(raw) as RunnerDescription;
+    result = JSON.parse(raw) as RunnerDescription;
   } catch {
-    return null;
+    result = null;
   }
+
+  describeRunnerCache.set(bin, result);
+  return result;
+}
+
+/** Clear the describeRunner cache (useful in tests). */
+export function clearDescribeRunnerCache(): void {
+  describeRunnerCache.clear();
+}
+
+/** Convert a RunnerDescription to a full RunnerProtocol. */
+export function toRunnerProtocol(desc: RunnerDescription): RunnerProtocol {
+  return {
+    contractVersion: desc.contractVersion ?? 0,
+    commands: {
+      describe: true,
+      run: true,
+      cancel: false,
+      health: false,
+    },
+    phases: desc.supportedPhases,
+    approvalModes: desc.supportedApprovalModes,
+    reasoningLevels: desc.supportedReasoningLevels,
+    providers: desc.availableProviders,
+    models: [],
+    capabilities: [],
+    limits: {},
+  };
+}
+
+/**
+ * Check whether a runner is compatible with what Hub needs.
+ * Returns warnings for missing optional features and errors for critical gaps.
+ */
+export function validateRunnerCompat(desc: RunnerDescription | null): RunnerCompatResult {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  if (!desc) {
+    return {
+      compatible: false,
+      warnings: [],
+      errors: ["Runner does not support 'workflow describe' — cannot verify compatibility."],
+      capabilities: {
+        contractVersion: 0,
+        commands: { describe: false, run: false, cancel: false, health: false },
+        phases: [],
+        approvalModes: [],
+        reasoningLevels: [],
+        providers: [],
+        models: [],
+        capabilities: [],
+        limits: {},
+      },
+    };
+  }
+
+  const protocol = toRunnerProtocol(desc);
+
+  // Check contract version
+  if (protocol.contractVersion < RUNNER_CONTRACT_VERSION) {
+    warnings.push(
+      `Runner contract version ${protocol.contractVersion} is older than Hub expects (${RUNNER_CONTRACT_VERSION}).`,
+    );
+  }
+
+  // Check required phases
+  const requiredPhases = ["triage", "plan", "implement", "verify", "review", "repair"];
+  for (const phase of requiredPhases) {
+    if (!protocol.phases.includes(phase)) {
+      errors.push(`Runner is missing required phase: ${phase}`);
+    }
+  }
+
+  // Check reasoning support (optional)
+  if (protocol.reasoningLevels.length === 0) {
+    warnings.push("Runner does not advertise reasoning levels — --reasoning flag will be skipped.");
+  }
+
+  // Check approval modes
+  if (protocol.approvalModes.length === 0) {
+    warnings.push("Runner does not advertise approval modes.");
+  }
+
+  return {
+    compatible: errors.length === 0,
+    warnings,
+    errors,
+    capabilities: protocol,
+  };
 }
 
 export class RunLauncher {
