@@ -244,6 +244,10 @@ function rowToAgentRun(row: AgentRunRow): AgentRun {
     eventsPath: row.events_path,
     iterations: row.iterations,
     costUsd: row.cost_usd,
+    runnerId: row.runner_id ?? null,
+    executorKind: (row.executor_kind as AgentRun["executorKind"]) ?? null,
+    profile: row.profile ?? null,
+    triggeredBy: (row.triggered_by as AgentRun["triggeredBy"]) ?? null,
   };
 }
 
