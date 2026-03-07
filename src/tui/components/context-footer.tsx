@@ -66,6 +66,7 @@ function runHints(status: string | null, hasActiveProcess: boolean): HintEntry[]
     hints.push({ key: "K", label: "kill" });
   }
 
+  hints.push({ key: "F", label: "diff" });
   hints.push({ key: "O", label: "open PR" });
   hints.push({ key: "Q", label: "quit" });
   return hints;

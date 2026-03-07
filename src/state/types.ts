@@ -4,12 +4,17 @@ export type WorkflowStatus =
   | "auto_review_fix_loop" | "awaiting_human_review" | "ready_to_merge"
   | "done" | "escalated" | "failed";
 
+export type SourceType = "issue" | "pr";
+export type WorkflowMode = "assisted" | "watch";
+
 export interface WorkflowRun {
   id: string;
   issueNumber: number;
   issueUrl: string;
   repo: string;
   status: WorkflowStatus;
+  sourceType: SourceType;
+  mode: WorkflowMode;
   branch: string | null;
   prNumber: number | null;
   prUrl: string | null;

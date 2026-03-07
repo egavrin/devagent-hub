@@ -19,14 +19,18 @@
 - State lives in `src/tui/state.ts` (UIState + uiReducer)
 - Keybindings in `src/tui/hooks/use-keybindings.ts`
 
-## Key Components (after refactor)
-- `app.tsx` — AppShell using UIState reducer, 3 screens
-- `run-header.tsx` — Rich header with status, phase, next action hint
-- `artifact-pane.tsx` — Latest artifact + verdict badges + history
+## Key Components (after M2+M3 refactor)
+- `app.tsx` — AppShell using UIState reducer, 3 screens, dialog system
+- `run-header.tsx` — Rich header with status, phase, next action hint, gate chain (M3), watch mode badge
+- `artifact-pane.tsx` — Latest artifact + verdict badges + review findings detail + plan sections + history
 - `timeline-pane.tsx` — Merged agent runs + gates + transitions
-- `context-footer.tsx` — Context-sensitive keybinding hints
+- `context-footer.tsx` — Context-sensitive keybinding hints per screen
 - `log-pane.tsx` — Structured/raw log toggle (S/L keys)
 - `run-card.tsx` — Phase badge, age, repair round
+- `new-run-dialog.tsx` — Source type (issue/PR), mode (assisted/watch)
+- `rework-dialog.tsx` — Feedback note input for plan rework
+- `approval-queue-view.tsx` — Navigable list of pending approvals + blocked runs
+- `why-paused-panel.tsx` — Explains why a run is paused/blocked/failed with suggestions
 
 ## Known Issues
 - 2 pre-existing test failures in `orchestrator-watch.test.ts` (status "done" vs expected "awaiting_human_review")

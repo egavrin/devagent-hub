@@ -77,8 +77,8 @@ describe("WorkflowOrchestrator — watch mode", () => {
 
     const run = await orchestrator.runWorkflow(200);
 
-    // In watch mode, should proceed all the way through without manual approval
-    expect(run.status).toBe("awaiting_human_review");
+    // In watch mode, should proceed all the way through to done (auto-ready PR)
+    expect(run.status).toBe("done");
 
     // Gate should have been called for triage, plan, and implement
     const gatePhases = gate.calls.map((c) => c.phase);
@@ -151,7 +151,7 @@ describe("WorkflowOrchestrator — watch mode", () => {
 
     // Plan should have been called twice (original + rework)
     expect(planCallCount).toBe(2);
-    expect(run.status).toBe("awaiting_human_review");
+    expect(run.status).toBe("done");
   });
 
   it("escalates when plan gate keeps rejecting beyond max rounds", async () => {

@@ -1,12 +1,14 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { Artifact, ApprovalRequest } from "../../state/types.js";
+import { ArtifactDiffView } from "./artifact-diff-view.js";
 
 interface ArtifactPaneProps {
   artifacts: Artifact[];
   approvals: ApprovalRequest[];
   isFocused: boolean;
   height: number;
+  showDiff?: boolean;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -149,7 +151,7 @@ function renderPlanSections(
   }
 }
 
-export function ArtifactPane({ artifacts, approvals, isFocused, height }: ArtifactPaneProps) {
+export function ArtifactPane({ artifacts, approvals, isFocused, height, showDiff }: ArtifactPaneProps) {
   const lines: Array<{ key: string; node: React.ReactNode }> = [];
 
   // Show latest artifact prominently with expanded detail
@@ -198,6 +200,22 @@ export function ArtifactPane({ artifacts, approvals, isFocused, height }: Artifa
       )});
     }
     lines.push({ key: "approvals-sep", node: <Text dimColor>{"\u2500".repeat(40)}</Text> });
+  }
+
+  // Version diff — find comparable artifacts (same type, multiple versions)
+  if (showDiff && latest) {
+    const sameType = artifacts.filter((a) => a.type === latest.type);
+    if (sameType.length >= 2) {
+      const older = sameType[sameType.length - 2];
+      lines.push({ key: "diff-section", node: (
+        <ArtifactDiffView
+          older={older}
+          newer={latest}
+          height={Math.min(10, Math.floor(height / 3))}
+        />
+      )});
+      lines.push({ key: "diff-sep", node: <Text dimColor>{"\u2500".repeat(40)}</Text> });
+    }
   }
 
   // Artifact history (older items)

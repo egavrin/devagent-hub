@@ -2,6 +2,8 @@ import { Database } from "bun:sqlite";
 import type {
   WorkflowRun,
   WorkflowStatus,
+  SourceType,
+  WorkflowMode,
   AgentRun,
   StatusTransition,
   Artifact,
@@ -18,6 +20,8 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   issue_url TEXT NOT NULL,
   repo TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'new',
+  source_type TEXT NOT NULL DEFAULT 'issue',
+  mode TEXT NOT NULL DEFAULT 'assisted',
   branch TEXT,
   pr_number INTEGER,
   pr_url TEXT,
@@ -87,6 +91,8 @@ interface WorkflowRunRow {
   issue_url: string;
   repo: string;
   status: string;
+  source_type: string;
+  mode: string;
   branch: string | null;
   pr_number: number | null;
   pr_url: string | null;
@@ -176,6 +182,8 @@ function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
     issueUrl: row.issue_url,
     repo: row.repo,
     status: row.status as WorkflowStatus,
+    sourceType: (row.source_type ?? "issue") as SourceType,
+    mode: (row.mode ?? "assisted") as WorkflowMode,
     branch: row.branch,
     prNumber: row.pr_number,
     prUrl: row.pr_url,
@@ -212,24 +220,41 @@ export class StateStore {
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec(MIGRATIONS);
+    this.migrate();
+  }
+
+  private migrate(): void {
+    // Add source_type and mode columns if missing (v2 migration)
+    const cols = this.db.prepare("PRAGMA table_info(workflow_runs)").all() as Array<{ name: string }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    if (!colNames.has("source_type")) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN source_type TEXT NOT NULL DEFAULT 'issue'");
+    }
+    if (!colNames.has("mode")) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'assisted'");
+    }
   }
 
   createWorkflowRun(opts: {
     issueNumber: number;
     issueUrl: string;
     repo: string;
+    sourceType?: SourceType;
+    mode?: WorkflowMode;
     metadata?: Record<string, unknown>;
   }): WorkflowRun {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const metadata = JSON.stringify(opts.metadata ?? {});
+    const sourceType = opts.sourceType ?? "issue";
+    const mode = opts.mode ?? "assisted";
 
     this.db
       .prepare(
-        `INSERT INTO workflow_runs (id, issue_number, issue_url, repo, status, repair_round, created_at, updated_at, metadata)
-         VALUES (?, ?, ?, ?, 'new', 0, ?, ?, ?)`
+        `INSERT INTO workflow_runs (id, issue_number, issue_url, repo, status, source_type, mode, repair_round, created_at, updated_at, metadata)
+         VALUES (?, ?, ?, ?, 'new', ?, ?, 0, ?, ?, ?)`
       )
-      .run(id, opts.issueNumber, opts.issueUrl, opts.repo, now, now, metadata);
+      .run(id, opts.issueNumber, opts.issueUrl, opts.repo, sourceType, mode, now, now, metadata);
 
     return this.getWorkflowRun(id)!;
   }

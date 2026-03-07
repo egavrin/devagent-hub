@@ -28,6 +28,7 @@ export interface UIState {
   focusedRowIndex: number;
   approvalIndex: number;
   statusMessage: string | null;
+  showArtifactDiff: boolean;
 }
 
 export type UIAction =
@@ -49,6 +50,7 @@ export type UIAction =
   | { type: "SET_APPROVAL_INDEX"; index: number }
   | { type: "SET_STATUS"; message: string | null }
   | { type: "OPEN_RUN"; runId: string }
+  | { type: "TOGGLE_ARTIFACT_DIFF" }
   | { type: "BACK" };
 
 const PANE_ORDER: FocusPane[] = ["queue", "artifact", "timeline", "logs"];
@@ -66,6 +68,7 @@ export const initialUIState: UIState = {
   focusedRowIndex: 0,
   approvalIndex: 0,
   statusMessage: null,
+  showArtifactDiff: false,
 };
 
 export function uiReducer(state: UIState, action: UIAction): UIState {
@@ -134,6 +137,9 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
     case "SET_STATUS":
       return { ...state, statusMessage: action.message };
 
+    case "TOGGLE_ARTIFACT_DIFF":
+      return { ...state, showArtifactDiff: !state.showArtifactDiff };
+
     case "OPEN_RUN":
       return {
         ...state,
@@ -141,6 +147,7 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
         selectedRunId: action.runId,
         focusedPane: "artifact",
         dialog: null,
+        showArtifactDiff: false,
       };
 
     case "BACK":

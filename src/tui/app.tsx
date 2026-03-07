@@ -430,6 +430,7 @@ export function App({ store, registry, orchestrator }: AppProps) {
     onRework: isDialogOpen ? () => {} : handleRework,
     onOpenExternal: handleOpenExternal,
     onApprovalsView: handleApprovalsView,
+    onToggleDiff: () => dispatch({ type: "TOGGLE_ARTIFACT_DIFF" }),
   }, ui.screen, ui.inputMode || isDialogOpen);
 
   // ─── Render ──────────────────────────────────────────────────
@@ -464,6 +465,7 @@ export function App({ store, registry, orchestrator }: AppProps) {
                 approvals={approvals}
                 isFocused={ui.focusedPane === "artifact"}
                 height={paneHeight * 2}
+                showDiff={ui.showArtifactDiff}
               />
             </Box>
 

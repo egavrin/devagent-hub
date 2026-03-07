@@ -20,6 +20,7 @@ export interface KeybindingActions {
   onRework: () => void;
   onOpenExternal: () => void;
   onApprovalsView: () => void;
+  onToggleDiff: () => void;
 }
 
 export function useKeybindings(
@@ -67,5 +68,6 @@ export function useKeybindings(
     if (input === "i" || input === "I") actions.onEnterInput();
     if (input === "o" || input === "O") actions.onOpenExternal();
     if (input === "v" || input === "V") actions.onApprovalsView();
+    if (input === "f" || input === "F") actions.onToggleDiff();
   });
 }
