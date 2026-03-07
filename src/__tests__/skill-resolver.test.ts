@@ -26,10 +26,10 @@ describe("resolveSkills", () => {
 
   it("adds path-override skills when files match", () => {
     const config = defaultConfig();
-    config.skills.path_overrides = {
+    config.skills = { defaults: [], by_stage: {}, path_overrides: {
       "packages/providers/**": ["provider-testing"],
       "**/*.test.ts": ["unit-testing"],
-    };
+    } };
 
     const files = ["packages/providers/src/index.ts", "src/main.ts"];
     expect(resolveSkills(config, "implement", files)).toEqual(["provider-testing"]);
