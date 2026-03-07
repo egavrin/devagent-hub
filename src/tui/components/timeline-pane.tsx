@@ -24,6 +24,7 @@ interface TimelineEntry {
   time: string;
   node: React.ReactNode;
   sortKey: string;
+  groupKey?: string; // used to group consecutive tool events for collapsing
 }
 
 export function TimelinePane({ agentRuns, transitions, artifacts, isFocused, height }: TimelinePaneProps) {
@@ -35,9 +36,12 @@ export function TimelinePane({ agentRuns, transitions, artifacts, isFocused, hei
     const statusColor = ar.status === "success" ? "green" : ar.status === "failed" ? "red" : "cyan";
     const dur = formatDuration(ar.startedAt, ar.finishedAt);
 
+    const kindBadge = ar.executorKind ? ` [${ar.executorKind}]` : "";
+
     entries.push({
       time: ar.startedAt.slice(11, 19),
       sortKey: ar.startedAt,
+      groupKey: `agent:${ar.phase}:${ar.workflowRunId}`,
       node: (
         <Text>
           <Text color={statusColor}>{statusMark}</Text>
@@ -45,6 +49,7 @@ export function TimelinePane({ agentRuns, transitions, artifacts, isFocused, hei
             ? <Text color="cyan" bold> {ar.phase}</Text>
             : <Text> {ar.phase}</Text>
           }
+          {kindBadge ? <Text dimColor>{kindBadge}</Text> : ""}
           <Text dimColor> {dur}</Text>
           {ar.iterations ? <Text dimColor> ({ar.iterations} iters)</Text> : ""}
         </Text>
@@ -88,7 +93,41 @@ export function TimelinePane({ agentRuns, transitions, artifacts, isFocused, hei
   }
 
   entries.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-  const visible = entries.slice(-(height - 3));
+
+  // Collapse consecutive tool events with the same groupKey when > 3 in a row
+  const collapsed: TimelineEntry[] = [];
+  let i = 0;
+  while (i < entries.length) {
+    const entry = entries[i];
+    if (!entry.groupKey) {
+      collapsed.push(entry);
+      i++;
+      continue;
+    }
+    // Collect consecutive entries with the same groupKey
+    let j = i + 1;
+    while (j < entries.length && entries[j].groupKey === entry.groupKey) {
+      j++;
+    }
+    const groupSize = j - i;
+    if (groupSize > 3) {
+      // Show first and last, with a collapsed indicator in between
+      collapsed.push(entries[i]);
+      collapsed.push({
+        time: "",
+        sortKey: entries[i].sortKey + ":collapsed",
+        node: <Text dimColor>  ... {groupSize - 2} more {entry.groupKey?.split(":")[1] ?? "tool"} events</Text>,
+      });
+      collapsed.push(entries[j - 1]);
+    } else {
+      for (let k = i; k < j; k++) {
+        collapsed.push(entries[k]);
+      }
+    }
+    i = j;
+  }
+
+  const visible = collapsed.slice(-(height - 3));
 
   return (
     <Box

@@ -272,6 +272,57 @@ export class StateStore {
     if (!colNames.has("mode")) {
       this.db.exec("ALTER TABLE workflow_runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'assisted'");
     }
+    if (!colNames.has("runner_id")) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN runner_id TEXT");
+    }
+    if (!colNames.has("agent_profile")) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN agent_profile TEXT");
+    }
+    if (!colNames.has("blocked_reason")) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN blocked_reason TEXT");
+    }
+    if (!colNames.has("next_action")) {
+      this.db.exec("ALTER TABLE workflow_runs ADD COLUMN next_action TEXT");
+    }
+
+    // Add new columns to agent_runs if missing
+    const arCols = this.db.prepare("PRAGMA table_info(agent_runs)").all() as Array<{ name: string }>;
+    const arColNames = new Set(arCols.map((c) => c.name));
+    if (!arColNames.has("runner_id")) {
+      this.db.exec("ALTER TABLE agent_runs ADD COLUMN runner_id TEXT");
+    }
+    if (!arColNames.has("executor_kind")) {
+      this.db.exec("ALTER TABLE agent_runs ADD COLUMN executor_kind TEXT");
+    }
+    if (!arColNames.has("profile")) {
+      this.db.exec("ALTER TABLE agent_runs ADD COLUMN profile TEXT");
+    }
+    if (!arColNames.has("triggered_by")) {
+      this.db.exec("ALTER TABLE agent_runs ADD COLUMN triggered_by TEXT");
+    }
+
+    // Add new columns to artifacts if missing
+    const artCols = this.db.prepare("PRAGMA table_info(artifacts)").all() as Array<{ name: string }>;
+    const artColNames = new Set(artCols.map((c) => c.name));
+    if (!artColNames.has("verdict")) {
+      this.db.exec("ALTER TABLE artifacts ADD COLUMN verdict TEXT");
+    }
+    if (!artColNames.has("blocking_count")) {
+      this.db.exec("ALTER TABLE artifacts ADD COLUMN blocking_count INTEGER");
+    }
+    if (!artColNames.has("confidence")) {
+      this.db.exec("ALTER TABLE artifacts ADD COLUMN confidence REAL");
+    }
+
+    // Add new columns to approval_requests if missing
+    const apCols = this.db.prepare("PRAGMA table_info(approval_requests)").all() as Array<{ name: string }>;
+    const apColNames = new Set(apCols.map((c) => c.name));
+    if (!apColNames.has("severity")) {
+      this.db.exec("ALTER TABLE approval_requests ADD COLUMN severity TEXT");
+    }
+    if (!apColNames.has("recommended_action")) {
+      this.db.exec("ALTER TABLE approval_requests ADD COLUMN recommended_action TEXT");
+    }
   }
 
   createWorkflowRun(opts: {
@@ -361,6 +412,10 @@ export class StateStore {
         | "currentPhase"
         | "repairRound"
         | "metadata"
+        | "runnerId"
+        | "agentProfile"
+        | "blockedReason"
+        | "nextAction"
       >
     >
   ): WorkflowRun {
@@ -401,6 +456,22 @@ export class StateStore {
       sets.push("metadata = ?");
       values.push(JSON.stringify(fields.metadata));
     }
+    if (fields.runnerId !== undefined) {
+      sets.push("runner_id = ?");
+      values.push(fields.runnerId);
+    }
+    if (fields.agentProfile !== undefined) {
+      sets.push("agent_profile = ?");
+      values.push(fields.agentProfile);
+    }
+    if (fields.blockedReason !== undefined) {
+      sets.push("blocked_reason = ?");
+      values.push(fields.blockedReason);
+    }
+    if (fields.nextAction !== undefined) {
+      sets.push("next_action = ?");
+      values.push(fields.nextAction);
+    }
 
     values.push(id);
     this.db
@@ -414,16 +485,30 @@ export class StateStore {
     workflowRunId: string;
     phase: string;
     inputPath?: string;
+    runnerId?: string;
+    executorKind?: "executor" | "reviewer" | "repairer";
+    profile?: string;
+    triggeredBy?: "human" | "policy" | "autopilot";
   }): AgentRun {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
 
     this.db
       .prepare(
-        `INSERT INTO agent_runs (id, workflow_run_id, phase, status, started_at, input_path)
-         VALUES (?, ?, ?, 'running', ?, ?)`
+        `INSERT INTO agent_runs (id, workflow_run_id, phase, status, started_at, input_path, runner_id, executor_kind, profile, triggered_by)
+         VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)`
       )
-      .run(id, opts.workflowRunId, opts.phase, now, opts.inputPath ?? null);
+      .run(
+        id,
+        opts.workflowRunId,
+        opts.phase,
+        now,
+        opts.inputPath ?? null,
+        opts.runnerId ?? null,
+        opts.executorKind ?? null,
+        opts.profile ?? null,
+        opts.triggeredBy ?? null,
+      );
 
     return this.getAgentRun(id)!;
   }
@@ -514,14 +599,17 @@ export class StateStore {
     summary: string;
     data: Record<string, unknown>;
     filePath?: string;
+    verdict?: string;
+    blockingCount?: number;
+    confidence?: number;
   }): Artifact {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
 
     this.db
       .prepare(
-        `INSERT INTO artifacts (id, workflow_run_id, agent_run_id, type, phase, summary, data, file_path, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO artifacts (id, workflow_run_id, agent_run_id, type, phase, summary, data, file_path, created_at, verdict, blocking_count, confidence)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -533,6 +621,9 @@ export class StateStore {
         JSON.stringify(opts.data),
         opts.filePath ?? null,
         now,
+        opts.verdict ?? null,
+        opts.blockingCount ?? null,
+        opts.confidence ?? null,
       );
 
     return this.getArtifact(id)!;
@@ -570,16 +661,26 @@ export class StateStore {
     workflowRunId: string;
     phase: string;
     summary: string;
+    severity?: "low" | "medium" | "high" | "critical";
+    recommendedAction?: string;
   }): ApprovalRequest {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
 
     this.db
       .prepare(
-        `INSERT INTO approval_requests (id, workflow_run_id, phase, summary, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO approval_requests (id, workflow_run_id, phase, summary, created_at, severity, recommended_action)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, opts.workflowRunId, opts.phase, opts.summary, now);
+      .run(
+        id,
+        opts.workflowRunId,
+        opts.phase,
+        opts.summary,
+        now,
+        opts.severity ?? null,
+        opts.recommendedAction ?? null,
+      );
 
     return this.getApprovalRequest(id)!;
   }

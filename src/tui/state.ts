@@ -1,4 +1,4 @@
-export type Screen = "dashboard" | "run" | "approvals";
+export type Screen = "dashboard" | "run" | "approvals" | "runners" | "autopilot";
 
 export type FocusPane = "queue" | "artifact" | "timeline" | "logs";
 
@@ -172,6 +172,12 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
         return { ...state, screen: "dashboard", focusedPane: "queue" };
       }
       if (state.screen === "approvals") {
+        return { ...state, screen: "dashboard", focusedPane: "queue" };
+      }
+      if (state.screen === "runners") {
+        return { ...state, screen: "dashboard", focusedPane: "queue" };
+      }
+      if (state.screen === "autopilot") {
         return { ...state, screen: "dashboard", focusedPane: "queue" };
       }
       return state;

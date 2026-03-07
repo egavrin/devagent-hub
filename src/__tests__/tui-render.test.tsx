@@ -30,6 +30,10 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     createdAt: new Date(Date.now() - 300_000).toISOString(),
     updatedAt: new Date().toISOString(),
     metadata: { title: "Fix login bug" },
+    runnerId: null,
+    agentProfile: null,
+    blockedReason: null,
+    nextAction: null,
     ...overrides,
   };
 }
@@ -45,6 +49,9 @@ function makeArtifact(overrides: Partial<Artifact> = {}): Artifact {
     data: { complexity: "small", summary: "Fix login bug" },
     filePath: null,
     createdAt: new Date().toISOString(),
+    verdict: null,
+    blockingCount: null,
+    confidence: null,
     ...overrides,
   };
 }
@@ -62,6 +69,10 @@ function makeAgentRun(overrides: Partial<AgentRun> = {}): AgentRun {
     eventsPath: null,
     iterations: 5,
     costUsd: null,
+    runnerId: null,
+    executorKind: null,
+    profile: null,
+    triggeredBy: null,
     ...overrides,
   };
 }
@@ -275,6 +286,8 @@ describe("ArtifactPane render", () => {
       reviewerComment: null,
       resolvedAt: null,
       createdAt: new Date().toISOString(),
+      severity: null,
+      recommendedAction: null,
     }];
     const { lastFrame } = render(
       <ArtifactPane artifacts={artifacts} approvals={approvals} isFocused={false} height={20} showDiff={false} />,

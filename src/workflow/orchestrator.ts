@@ -161,19 +161,92 @@ export class WorkflowOrchestrator {
     }
   }
 
-  async triage(issueNumber: number): Promise<WorkflowRun> {
+  async triageFromPR(prNumber: number): Promise<WorkflowRun> {
+    const pr = await this.github.fetchPR(this.repo, prNumber);
+
+    const workflowRun = this.store.createWorkflowRun({
+      issueNumber: pr.number,
+      issueUrl: pr.url,
+      repo: this.repo,
+      sourceType: "pr",
+      metadata: { title: pr.title },
+    });
+
+    this.store.updateWorkflowRun(workflowRun.id, {
+      prNumber: pr.number,
+      prUrl: pr.url,
+    });
+
+    const agentRun = this.store.createAgentRun({
+      workflowRunId: workflowRun.id,
+      phase: "triage",
+      executorKind: "executor",
+      triggeredBy: "human",
+    });
+    this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "triage" });
+
+    const result = await this.launcher.launch({
+      phase: "triage",
+      repoPath: this.repoRoot,
+      runId: agentRun.id,
+      input: withSkills({
+        issueNumber: pr.number,
+        title: pr.title,
+        body: pr.body,
+        labels: [] as string[],
+        author: "",
+        sourceType: "pr",
+        prUrl: pr.url,
+        head: pr.head,
+        base: pr.base,
+      }, this.config, "triage"),
+    });
+
+    const agentStatus = result.exitCode === 0 ? "success" : "failed";
+    this.store.completeAgentRun(agentRun.id, {
+      status: agentStatus,
+      outputPath: result.outputPath,
+      eventsPath: result.eventsPath,
+    });
+
+    if (agentStatus === "failed") {
+      this.store.updateStatus(workflowRun.id, "failed", "Triage agent failed");
+      return this.store.getWorkflowRun(workflowRun.id)!;
+    }
+
+    // Store triage artifact
+    const output = asOutput<TriageOutput>(result.output);
+    const summary = output?.summary ?? "Triage completed successfully.";
+    this.store.createArtifact({
+      workflowRunId: workflowRun.id,
+      agentRunId: agentRun.id,
+      type: "triage_report",
+      phase: "triage",
+      summary,
+      data: toData(output),
+      filePath: result.outputPath,
+    });
+
+    this.store.updateStatus(workflowRun.id, "triaged", "Triage completed");
+    return this.store.getWorkflowRun(workflowRun.id)!;
+  }
+
+  async triage(issueNumber: number, sourceType?: "issue" | "pr"): Promise<WorkflowRun> {
     const issue = await this.github.fetchIssue(this.repo, issueNumber);
 
     const workflowRun = this.store.createWorkflowRun({
       issueNumber: issue.number,
       issueUrl: issue.url,
       repo: this.repo,
+      sourceType: sourceType ?? "issue",
       metadata: { title: issue.title },
     });
 
     const agentRun = this.store.createAgentRun({
       workflowRunId: workflowRun.id,
       phase: "triage",
+      executorKind: "executor",
+      triggeredBy: "human",
     });
     this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "triage" });
 
@@ -251,6 +324,8 @@ export class WorkflowOrchestrator {
     const agentRun = this.store.createAgentRun({
       workflowRunId: workflowRun.id,
       phase: "plan",
+      executorKind: "executor",
+      triggeredBy: "human",
     });
     this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "plan" });
 
@@ -420,6 +495,8 @@ export class WorkflowOrchestrator {
     const agentRun = this.store.createAgentRun({
       workflowRunId: workflowRun.id,
       phase: "implement",
+      executorKind: "executor",
+      triggeredBy: "human",
     });
 
     const planData = acceptedPlan?.data ?? {};
@@ -486,6 +563,8 @@ export class WorkflowOrchestrator {
     const agentRun = this.store.createAgentRun({
       workflowRunId: workflowRun.id,
       phase: "verify",
+      executorKind: "executor",
+      triggeredBy: "human",
     });
     this.store.updateWorkflowRun(workflowRun.id, { currentPhase: "verify" });
 
@@ -610,6 +689,8 @@ export class WorkflowOrchestrator {
     const agentRun = this.store.createAgentRun({
       workflowRunId: wfRun.id,
       phase: "review",
+      executorKind: "reviewer",
+      triggeredBy: "human",
     });
     this.store.updateWorkflowRun(wfRun.id, { currentPhase: "review" });
 
@@ -695,6 +776,8 @@ export class WorkflowOrchestrator {
     const agentRun = this.store.createAgentRun({
       workflowRunId: wfRun.id,
       phase: "repair",
+      executorKind: "repairer",
+      triggeredBy: "human",
     });
     this.store.updateWorkflowRun(wfRun.id, { currentPhase: "repair" });
 
@@ -809,7 +892,12 @@ export class WorkflowOrchestrator {
     }
 
     const currentRound = wfRun.repairRound + 1;
-    const agentRun = this.store.createAgentRun({ workflowRunId: wfRun.id, phase: "repair" });
+    const agentRun = this.store.createAgentRun({
+      workflowRunId: wfRun.id,
+      phase: "repair",
+      executorKind: "repairer",
+      triggeredBy: "policy",
+    });
     this.store.updateWorkflowRun(wfRun.id, { currentPhase: "repair" });
 
     this.store.createArtifact({

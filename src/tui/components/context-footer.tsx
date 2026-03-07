@@ -24,7 +24,25 @@ function dashboardHints(autopilotRunning?: boolean): HintEntry[] {
     { key: "N", label: "new" },
     { key: "V", label: "approvals" },
     { key: "C", label: "continue" },
+    { key: "M", label: "runners" },
+    { key: "U", label: "autopilot" },
     { key: "X", label: autopilotRunning ? "stop autopilot" : "autopilot" },
+    { key: "Q", label: "quit" },
+  ];
+}
+
+function runnersHints(): HintEntry[] {
+  return [
+    { key: "Esc", label: "back" },
+    { key: "Q", label: "quit" },
+  ];
+}
+
+function autopilotHints(): HintEntry[] {
+  return [
+    { key: "j/k", label: "nav" },
+    { key: "Esc", label: "back" },
+    { key: "X", label: "toggle" },
     { key: "Q", label: "quit" },
   ];
 }
@@ -89,6 +107,10 @@ export function ContextFooter({ screen, dialog, inputMode, runStatus, hasActiveP
     hints = approvalHints();
   } else if (screen === "run") {
     hints = runHints(runStatus ?? null, hasActiveProcess);
+  } else if (screen === "runners") {
+    hints = runnersHints();
+  } else if (screen === "autopilot") {
+    hints = autopilotHints();
   } else {
     hints = dashboardHints(autopilotRunning);
   }

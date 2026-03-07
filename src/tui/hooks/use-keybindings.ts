@@ -1,4 +1,5 @@
 import { useInput } from "ink";
+import { useRef } from "react";
 import type { Screen } from "../state.js";
 
 export interface KeybindingActions {
@@ -24,6 +25,14 @@ export interface KeybindingActions {
   onPause: () => void;
   onTakeOver: () => void;
   onToggleAutopilot: () => void;
+  onRunnersView: () => void;
+  onAutopilotView: () => void;
+  onFilter: () => void;
+  onCommandPalette: () => void;
+  onHelp: () => void;
+  onPaneShortcut: (index: number) => void;
+  onGoTop: () => void;
+  onGoBottom: () => void;
 }
 
 export function useKeybindings(
@@ -31,6 +40,8 @@ export function useKeybindings(
   screen: Screen,
   inputMode: boolean,
 ): void {
+  const lastKeyRef = useRef<{ key: string; time: number }>({ key: "", time: 0 });
+
   useInput((input, key) => {
     // In input/dialog mode, only Esc works
     if (inputMode) {
@@ -75,5 +86,41 @@ export function useKeybindings(
     if (input === "p" || input === "P") actions.onPause();
     if (input === "t" || input === "T") actions.onTakeOver();
     if (input === "x" || input === "X") actions.onToggleAutopilot();
+    if (input === "m" || input === "M") actions.onRunnersView();
+    if (input === "u" || input === "U") actions.onAutopilotView();
+
+    // Filter (/ key)
+    if (input === "/") actions.onFilter();
+
+    // Command palette (: key) — only when not in inputMode (already guarded above)
+    if (input === ":") actions.onCommandPalette();
+
+    // Help (? key)
+    if (input === "?") actions.onHelp();
+
+    // Pane shortcuts (1-5) — only on run screen
+    if (screen === "run") {
+      if (input === "1") actions.onPaneShortcut(0);
+      if (input === "2") actions.onPaneShortcut(1);
+      if (input === "3") actions.onPaneShortcut(2);
+      if (input === "4") actions.onPaneShortcut(3);
+      if (input === "5") actions.onPaneShortcut(4);
+    }
+
+    // G → go to bottom
+    if (input === "G") actions.onGoBottom();
+
+    // gg → go to top (track last key with 300ms timeout)
+    const now = Date.now();
+    if (input === "g" && !key.shift) {
+      if (lastKeyRef.current.key === "g" && now - lastKeyRef.current.time < 300) {
+        actions.onGoTop();
+        lastKeyRef.current = { key: "", time: 0 };
+        return;
+      }
+      lastKeyRef.current = { key: "g", time: now };
+    } else {
+      lastKeyRef.current = { key: input, time: now };
+    }
   });
 }

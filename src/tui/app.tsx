@@ -1,5 +1,6 @@
 import React, { useReducer, useCallback, useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useStdout } from "ink";
+import TextInput from "ink-text-input";
 import type { StateStore } from "../state/store.js";
 import type { ProcessRegistry } from "../runner/process-registry.js";
 import type { WorkflowOrchestrator } from "../workflow/orchestrator.js";
@@ -23,7 +24,13 @@ import { ApprovalQueueView } from "./components/approval-queue-view.js";
 import type { ApprovalQueueItem } from "./components/approval-queue-view.js";
 import { WhyPausedPanel } from "./components/why-paused-panel.js";
 import { AutopilotBar } from "./components/autopilot-bar.js";
+import { RunnersView } from "./components/runners-view.js";
+import { AutopilotView } from "./components/autopilot-view.js";
+import { CommandPalette } from "./components/command-palette.js";
+import type { PaletteCommand } from "./components/command-palette.js";
+import { HelpDialog } from "./components/help-dialog.js";
 import { uiReducer, initialUIState } from "./state.js";
+import type { FocusPane, LogMode } from "./state.js";
 
 interface AppProps {
   store: StateStore;
@@ -42,6 +49,21 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
   const runs = useWorkflowRuns(store);
 
   const [ui, dispatch] = useReducer(uiReducer, initialUIState);
+
+  // Filter runs when filter is active
+  const filteredRuns = React.useMemo(() => {
+    if (!ui.filterActive || !ui.filterQuery.trim()) return runs;
+    const q = ui.filterQuery.toLowerCase();
+    return runs.filter((r) => {
+      const title = ((r.metadata as Record<string, unknown>)?.title as string) ?? "";
+      return (
+        String(r.issueNumber).includes(q) ||
+        title.toLowerCase().includes(q) ||
+        r.status.toLowerCase().includes(q) ||
+        r.repo.toLowerCase().includes(q)
+      );
+    });
+  }, [runs, ui.filterActive, ui.filterQuery]);
 
   // Autopilot state
   const [autopilotRunning, setAutopilotRunning] = useState(false);
@@ -120,8 +142,8 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
   const getColumnRuns = useCallback((colIndex: number) => {
     const col = KANBAN_COLUMNS[colIndex];
     if (!col) return [];
-    return runs.filter((r) => col.statuses.includes(r.status));
-  }, [runs]);
+    return filteredRuns.filter((r) => col.statuses.includes(r.status));
+  }, [filteredRuns]);
 
   const handleNavigate = useCallback((direction: "up" | "down" | "left" | "right") => {
     if (ui.screen === "approvals") {
@@ -393,7 +415,9 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
 
     const runFn = mode === "watch"
       ? orchestrator.runWorkflow(sourceId)
-      : orchestrator.triage(sourceId);
+      : sourceType === "pr"
+        ? orchestrator.triageFromPR(sourceId)
+        : orchestrator.triage(sourceId);
 
     runFn.then(
       (run) => {
@@ -521,6 +545,50 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
     onPause: isDialogOpen ? () => {} : handlePause,
     onTakeOver: isDialogOpen ? () => {} : handleTakeOver,
     onToggleAutopilot: isDialogOpen ? () => {} : handleToggleAutopilot,
+    onRunnersView: () => dispatch({ type: "SET_SCREEN", screen: "runners" }),
+    onAutopilotView: () => dispatch({ type: "SET_SCREEN", screen: "autopilot" }),
+    onFilter: isDialogOpen ? () => {} : () => dispatch({ type: "TOGGLE_FILTER" }),
+    onCommandPalette: isDialogOpen ? () => {} : () => dispatch({ type: "OPEN_DIALOG", dialog: "command-palette" }),
+    onHelp: isDialogOpen ? () => {} : () => dispatch({ type: "OPEN_DIALOG", dialog: "help" }),
+    onPaneShortcut: (index: number) => {
+      const paneMap: [FocusPane, LogMode | null][] = [
+        ["queue", null],
+        ["artifact", null],
+        ["timeline", null],
+        ["logs", "structured"],
+        ["logs", "raw"],
+      ];
+      const entry = paneMap[index];
+      if (!entry) return;
+      dispatch({ type: "SET_FOCUSED_PANE", pane: entry[0] });
+      if (entry[1]) {
+        dispatch({ type: "SET_LOG_MODE", mode: entry[1] });
+      }
+    },
+    onGoTop: () => {
+      if (ui.screen === "dashboard") {
+        dispatch({ type: "SET_FOCUSED_ROW", index: 0 });
+        const colRuns = getColumnRuns(ui.focusedColumnIndex);
+        if (colRuns[0]) {
+          dispatch({ type: "SELECT_RUN", runId: colRuns[0].id });
+        }
+      } else if (ui.screen === "approvals") {
+        dispatch({ type: "SET_APPROVAL_INDEX", index: 0 });
+      }
+    },
+    onGoBottom: () => {
+      if (ui.screen === "dashboard") {
+        const colRuns = getColumnRuns(ui.focusedColumnIndex);
+        const lastIdx = Math.max(0, colRuns.length - 1);
+        dispatch({ type: "SET_FOCUSED_ROW", index: lastIdx });
+        if (colRuns[lastIdx]) {
+          dispatch({ type: "SELECT_RUN", runId: colRuns[lastIdx].id });
+        }
+      } else if (ui.screen === "approvals") {
+        const totalItems = approvalQueueItems.length + blockedRuns.length;
+        dispatch({ type: "SET_APPROVAL_INDEX", index: Math.max(0, totalItems - 1) });
+      }
+    },
   }, ui.screen, ui.inputMode || isDialogOpen);
 
   // ─── Render ──────────────────────────────────────────────────
@@ -590,6 +658,18 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
           selectedIndex={ui.approvalIndex}
           height={termHeight - 4}
         />
+      ) : ui.screen === "runners" && config ? (
+        /* ── Runners screen ──────────────────────────────── */
+        <RunnersView config={config} height={termHeight - 4} />
+      ) : ui.screen === "autopilot" ? (
+        /* ── Autopilot screen ────────────────────────────── */
+        <AutopilotView
+          config={config}
+          runs={runs}
+          autopilotRunning={autopilotRunning}
+          stats={autopilotStats}
+          height={termHeight - 4}
+        />
       ) : (
         /* ── Dashboard screen ─────────────────────────────── */
         <>
@@ -599,8 +679,19 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
             activeCount={autopilotStats.activeCount}
             totalDispatched={autopilotStats.totalDispatched}
           />
+          {ui.filterActive && (
+            <Box paddingLeft={1} flexShrink={0}>
+              <Text color="cyan">Filter: </Text>
+              <TextInput
+                value={ui.filterQuery}
+                onChange={(v: string) => dispatch({ type: "SET_FILTER", query: v })}
+                onSubmit={() => {}}
+              />
+              <Text dimColor>  [/ to close, type to filter]</Text>
+            </Box>
+          )}
           <KanbanBoard
-            runs={runs}
+            runs={filteredRuns}
             selectedRunId={ui.selectedRunId}
             activeRunId={activeProcessId}
             focusedColumnIndex={ui.focusedColumnIndex}
@@ -668,6 +759,33 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
             onSubmit={handleReworkSubmit}
             onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
           />
+        </Box>
+      )}
+
+      {ui.dialog === "command-palette" && (
+        <Box position="absolute" marginTop={5} marginLeft={Math.floor((termWidth - 52) / 2)}>
+          <CommandPalette
+            onSubmit={(command) => {
+              dispatch({ type: "CLOSE_DIALOG" });
+              switch (command) {
+                case "approve": handleApprove(); break;
+                case "rework": handleRework(); break;
+                case "retry": handleRetry(); break;
+                case "kill": handleKill(); break;
+                case "pause": handlePause(); break;
+                case "continue": handleContinue(); break;
+                case "filter": dispatch({ type: "TOGGLE_FILTER" }); break;
+                case "help": dispatch({ type: "OPEN_DIALOG", dialog: "help" }); break;
+              }
+            }}
+            onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
+          />
+        </Box>
+      )}
+
+      {ui.dialog === "help" && (
+        <Box position="absolute" marginTop={2} marginLeft={Math.floor((termWidth - 62) / 2)}>
+          <HelpDialog onClose={() => dispatch({ type: "CLOSE_DIALOG" })} />
         </Box>
       )}
 
