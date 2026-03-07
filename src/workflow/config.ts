@@ -32,6 +32,26 @@ export interface AgentProfile {
   reasoning?: string;
   max_iterations?: number;
   approval_mode?: string;
+  /** Capability tags for selection policy matching (e.g., "fast", "strong", "cheap"). */
+  capabilities?: string[];
+}
+
+/**
+ * Selection policy: maps phase risk/complexity to profile capabilities.
+ * When a phase is dispatched, the policy selects the best-matching profile.
+ */
+export interface SelectionPolicy {
+  /** Rules evaluated top-to-bottom; first match wins. */
+  rules: SelectionRule[];
+}
+
+export interface SelectionRule {
+  /** Phase(s) this rule applies to. "*" matches all. */
+  phases: string[];
+  /** Required complexity level for this rule to match (from triage). */
+  complexity?: string[];
+  /** Profile name to use when this rule matches. */
+  profile: string;
 }
 
 export interface WorkflowConfig {
@@ -43,6 +63,15 @@ export interface WorkflowConfig {
   runner: { bin?: string; approval_mode: string; max_iterations: number; provider?: string; model?: string; reasoning?: string };
   profiles: Record<string, AgentProfile>;
   roles: Record<string, string>;
+  selection_policy?: SelectionPolicy;
+  skills: {
+    /** Default skills applied to all stages. */
+    defaults: string[];
+    /** Stage-specific skill overrides. */
+    by_stage: Record<string, string[]>;
+    /** Path-pattern → skills mappings (glob patterns). */
+    path_overrides: Record<string, string[]>;
+  };
   verify: { commands: string[] };
   pr: { draft: boolean; open_requires: string[] };
   repair: { max_rounds: number };
@@ -53,6 +82,12 @@ export interface WorkflowConfig {
     eligible_labels: string[];
     priority_labels: string[];
     exclude_labels: string[];
+    /** Max triage complexity autopilot will handle without escalation. */
+    max_complexity: string;
+    /** Min gate confidence to proceed without escalation (0-1). */
+    min_gate_confidence: number;
+    /** Max files changed before escalating for human review. */
+    max_changed_files: number;
   };
 }
 
@@ -73,6 +108,11 @@ export function defaultConfig(): WorkflowConfig {
       repair: "default",
       gate: "default",
     },
+    skills: {
+      defaults: [],
+      by_stage: {},
+      path_overrides: {},
+    },
     verify: { commands: ["bun run test", "bun run typecheck"] },
     pr: { draft: true, open_requires: ["verify"] },
     repair: { max_rounds: 3 },
@@ -83,6 +123,9 @@ export function defaultConfig(): WorkflowConfig {
       eligible_labels: ["devagent"],
       priority_labels: ["priority", "urgent", "critical"],
       exclude_labels: ["blocked", "wontfix", "duplicate"],
+      max_complexity: "medium",
+      min_gate_confidence: 0.7,
+      max_changed_files: 20,
     },
   };
 }

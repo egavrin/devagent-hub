@@ -21,7 +21,11 @@ export type AutopilotEvent =
   | { type: "complete"; issueNumber: number; status: string }
   | { type: "error"; issueNumber: number; error: string }
   | { type: "skip"; issueNumber: number; reason: string }
+  | { type: "escalate"; issueNumber: number; reason: string }
   | { type: "stopped" };
+
+/** Complexity ordering for threshold comparison. */
+const COMPLEXITY_ORDER = ["trivial", "small", "medium", "large", "epic"];
 
 interface PrioritizedIssue {
   issue: GitHubIssue;
@@ -169,6 +173,10 @@ export class AutopilotDaemon {
   private async dispatchRun(issueNumber: number): Promise<void> {
     try {
       const run = await this.orchestrator.runWorkflow(issueNumber);
+
+      // Post-run risk checks
+      this.checkRunRisk(issueNumber, run.id);
+
       this.emit({ type: "complete", issueNumber, status: run.status });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -177,6 +185,60 @@ export class AutopilotDaemon {
     } finally {
       this.activeRuns.delete(issueNumber);
     }
+  }
+
+  /** Check risk thresholds after a run completes. Escalates if exceeded. */
+  private checkRunRisk(issueNumber: number, runId: string): void {
+    const { max_complexity, min_gate_confidence, max_changed_files } = this.config.autopilot;
+
+    // Check triage complexity
+    const triageArtifact = this.store.getLatestArtifact(runId, "triage_report");
+    if (triageArtifact?.data) {
+      const complexity = triageArtifact.data.complexity as string | undefined;
+      if (complexity && this.exceedsComplexity(complexity, max_complexity)) {
+        this.emit({
+          type: "escalate",
+          issueNumber,
+          reason: `Complexity "${complexity}" exceeds autopilot max "${max_complexity}"`,
+        });
+        this.orchestrator.requestPause(runId);
+      }
+    }
+
+    // Check gate confidence
+    const gateArtifacts = this.store.getArtifactsByWorkflow(runId)
+      .filter((a) => a.type === "gate_verdict");
+    for (const gate of gateArtifacts) {
+      const confidence = gate.data.confidence as number | undefined;
+      if (confidence !== undefined && confidence < min_gate_confidence) {
+        this.emit({
+          type: "escalate",
+          issueNumber,
+          reason: `Gate confidence ${confidence.toFixed(2)} below threshold ${min_gate_confidence}`,
+        });
+      }
+    }
+
+    // Check changed files count
+    const implArtifact = this.store.getLatestArtifact(runId, "implementation_report");
+    if (implArtifact?.data) {
+      const changedFiles = implArtifact.data.changedFiles as string[] | undefined;
+      if (changedFiles && changedFiles.length > max_changed_files) {
+        this.emit({
+          type: "escalate",
+          issueNumber,
+          reason: `${changedFiles.length} files changed exceeds max ${max_changed_files}`,
+        });
+      }
+    }
+  }
+
+  /** Check if a complexity level exceeds the threshold. */
+  private exceedsComplexity(actual: string, max: string): boolean {
+    const actualIdx = COMPLEXITY_ORDER.indexOf(actual);
+    const maxIdx = COMPLEXITY_ORDER.indexOf(max);
+    if (actualIdx === -1 || maxIdx === -1) return false;
+    return actualIdx > maxIdx;
   }
 
   /** Abortable sleep. */

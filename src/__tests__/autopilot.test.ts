@@ -37,6 +37,9 @@ function makeConfig(): WorkflowConfig {
     eligible_labels: ["devagent"],
     priority_labels: ["urgent", "priority"],
     exclude_labels: ["blocked"],
+    max_complexity: "medium",
+    min_gate_confidence: 0.7,
+    max_changed_files: 20,
   };
   return config;
 }

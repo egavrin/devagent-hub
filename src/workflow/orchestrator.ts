@@ -14,6 +14,7 @@ import type {
   RepairOutput,
 } from "./stage-schemas.js";
 import { defaultConfig } from "./config.js";
+import { resolveSkills } from "./skill-resolver.js";
 import { execFileSync } from "node:child_process";
 
 export interface Finding {
@@ -23,6 +24,18 @@ export interface Finding {
   message: string;
   category: string;
   author?: string;
+}
+
+/** Enrich a stage input with resolved skills from config. */
+function withSkills(
+  input: Record<string, unknown>,
+  config: WorkflowConfig,
+  phase: string,
+  changedFiles?: string[],
+): Record<string, unknown> {
+  const skills = resolveSkills(config, phase, changedFiles);
+  if (skills.length === 0) return input;
+  return { ...input, skills };
 }
 
 /** Safely cast launcher output to a typed phase output, returning null on mismatch. */
@@ -168,13 +181,13 @@ export class WorkflowOrchestrator {
       phase: "triage",
       repoPath: this.repoRoot,
       runId: agentRun.id,
-      input: {
+      input: withSkills({
         issueNumber: issue.number,
         title: issue.title,
         body: issue.body,
         labels: [...issue.labels],
         author: issue.author,
-      },
+      }, this.config, "triage"),
     });
 
     const agentStatus = result.exitCode === 0 ? "success" : "failed";
@@ -409,16 +422,21 @@ export class WorkflowOrchestrator {
       phase: "implement",
     });
 
+    const planData = acceptedPlan?.data ?? {};
+    const planFiles = [
+      ...((planData.filesToCreate as string[]) ?? []),
+      ...((planData.filesToModify as string[]) ?? []),
+    ];
     const result = await this.launcher.launch({
       phase: "implement",
       repoPath: workDir,
       runId: agentRun.id,
-      input: {
+      input: withSkills({
         issueNumber: issue.number,
         title: issue.title,
         body: issue.body,
-        acceptedPlan: acceptedPlan?.data ?? {},
-      },
+        acceptedPlan: planData,
+      }, this.config, "implement", planFiles),
     });
 
     const agentStatus = result.exitCode === 0 ? "success" : "failed";
