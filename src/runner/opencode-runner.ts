@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { RunnerAdapter, LaunchParams, RunnerCapabilities } from "./runner-adapter.js";
 import type { LaunchResult } from "./launcher.js";
+import { buildSkillContext } from "./skill-prompt.js";
 
 /**
  * Prompt templates for each workflow phase.
@@ -153,7 +154,8 @@ export class OpenCodeRunner implements RunnerAdapter {
       };
     }
 
-    const prompt = promptBuilder(input as Record<string, unknown>);
+    const prompt = promptBuilder(input as Record<string, unknown>)
+      + buildSkillContext(input as Record<string, unknown>, repoPath);
 
     // Create run dir
     const runDir = join(this.artifactsDir, runId);

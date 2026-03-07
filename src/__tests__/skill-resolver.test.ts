@@ -5,6 +5,7 @@ import { defaultConfig } from "../workflow/config.js";
 describe("resolveSkills", () => {
   it("returns empty array when no skills configured", () => {
     const config = defaultConfig();
+    config.skills = { defaults: [], by_stage: {}, path_overrides: {} };
     expect(resolveSkills(config, "triage")).toEqual([]);
   });
 
@@ -46,7 +47,7 @@ describe("resolveSkills", () => {
 
   it("ignores path overrides when no files provided", () => {
     const config = defaultConfig();
-    config.skills.path_overrides = { "src/**": ["src-skill"] };
+    config.skills = { defaults: [], by_stage: {}, path_overrides: { "src/**": ["src-skill"] } };
     expect(resolveSkills(config, "implement")).toEqual([]);
   });
 });

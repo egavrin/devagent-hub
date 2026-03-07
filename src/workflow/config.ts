@@ -110,8 +110,15 @@ export function defaultConfig(): WorkflowConfig {
     },
     skills: {
       defaults: [],
-      by_stage: {},
-      path_overrides: {},
+      by_stage: {
+        implement: ["testing"],
+        review: ["security-checklist"],
+      },
+      path_overrides: {
+        "src/runner/**": ["runner-integration"],
+        "src/workflow/**": ["state-machine"],
+        "src/__tests__/**": ["testing"],
+      },
     },
     verify: { commands: ["bun run test", "bun run typecheck"] },
     pr: { draft: true, open_requires: ["verify"] },
