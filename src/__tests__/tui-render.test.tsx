@@ -169,9 +169,9 @@ describe("ContextFooter render", () => {
       <ContextFooter screen="dashboard" dialog={null} inputMode={false} hasActiveProcess={false} />,
     );
     const frame = lastFrame()!;
-    expect(frame).toContain("nav");
-    expect(frame).toContain("open");
-    expect(frame).toContain("quit");
+    expect(frame).toContain("j/k");
+    expect(frame).toContain("Enter");
+    expect(frame).toContain("Q");
   });
 
   it("renders approval hints", () => {
@@ -231,7 +231,9 @@ describe("ContextFooter render", () => {
     const { lastFrame } = render(
       <ContextFooter screen="dashboard" dialog={null} inputMode={false} hasActiveProcess={false} autopilotRunning={true} />,
     );
-    expect(lastFrame()!).toContain("stop autopilot");
+    const frame = lastFrame()!;
+    expect(frame).toContain("stop");
+    expect(frame).toContain("X");
   });
 });
 
