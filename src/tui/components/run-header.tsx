@@ -121,6 +121,20 @@ export function RunHeader({ run, isActive, gateVerdicts }: RunHeaderProps) {
 
       <GateChain gateVerdicts={gateVerdicts ?? []} />
 
+      {run.blockedReason && (
+        <Box>
+          <Text color="red" bold>BLOCKED: </Text>
+          <Text>{run.blockedReason}</Text>
+        </Box>
+      )}
+
+      {run.nextAction && (
+        <Box>
+          <Text dimColor>Next: </Text>
+          <Text color="cyan">{run.nextAction}</Text>
+        </Box>
+      )}
+
       {hint && (
         <Text color="yellow">{hint}</Text>
       )}

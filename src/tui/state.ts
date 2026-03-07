@@ -2,7 +2,7 @@ export type Screen = "dashboard" | "run" | "approvals" | "runners" | "autopilot"
 
 export type FocusPane = "queue" | "artifact" | "timeline" | "logs";
 
-export type LogMode = "structured" | "raw";
+export type LogMode = "structured" | "raw" | "errors";
 
 export type Dialog = null | "new-run" | "rework" | "command-palette" | "help" | "rerun";
 
@@ -13,6 +13,7 @@ export interface NewRunForm {
   sourceType: NewRunSourceType;
   sourceId: string;
   mode: NewRunMode;
+  profile: string;  // selected profile name, empty = default
 }
 
 export interface UIState {
@@ -47,6 +48,7 @@ export type UIAction =
   | { type: "SET_NEW_RUN_SOURCE_TYPE"; sourceType: NewRunSourceType }
   | { type: "SET_NEW_RUN_SOURCE_ID"; value: string }
   | { type: "SET_NEW_RUN_MODE"; mode: NewRunMode }
+  | { type: "SET_NEW_RUN_PROFILE"; profile: string }
   | { type: "SET_REWORK_NOTE"; value: string }
   | { type: "SET_FOCUSED_COLUMN"; index: number }
   | { type: "SET_FOCUSED_ROW"; index: number }
@@ -68,7 +70,7 @@ export const initialUIState: UIState = {
   logMode: "structured",
   inputMode: false,
   dialog: null,
-  newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted" },
+  newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted", profile: "" },
   reworkNote: "",
   focusedColumnIndex: 0,
   focusedRowIndex: 0,
@@ -114,7 +116,7 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
         ...state,
         dialog: action.dialog,
         ...(action.dialog === "new-run"
-          ? { newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted" } }
+          ? { newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted", profile: "" } }
           : {}),
         ...(action.dialog === "rework" ? { reworkNote: "" } : {}),
         ...(action.dialog === "rerun" ? { rerunProfileIndex: 0 } : {}),
@@ -131,6 +133,9 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
 
     case "SET_NEW_RUN_MODE":
       return { ...state, newRunForm: { ...state.newRunForm, mode: action.mode } };
+
+    case "SET_NEW_RUN_PROFILE":
+      return { ...state, newRunForm: { ...state.newRunForm, profile: action.profile } };
 
     case "SET_REWORK_NOTE":
       return { ...state, reworkNote: action.value };

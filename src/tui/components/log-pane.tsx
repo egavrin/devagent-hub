@@ -25,7 +25,12 @@ export function LogPane({ selectedRun, logMode, events, outputLines, isFocused }
   }
 
   const repoShort = selectedRun.repo.split("/").pop() ?? selectedRun.repo;
-  const modeLabel = logMode === "structured" ? "[S]truct" : "[L]og";
+  const modeLabel = logMode === "structured" ? "[S]truct" : logMode === "errors" ? "[E]rrors" : "[L]og";
+
+  const errorPattern = /error|fail/i;
+  const errorEvents = events.filter(
+    (ev) => ev.type === "error" || errorPattern.test(ev.summary ?? "") || errorPattern.test(ev.type),
+  );
 
   return (
     <Box
@@ -44,6 +49,11 @@ export function LogPane({ selectedRun, logMode, events, outputLines, isFocused }
       <Box marginTop={1} flexDirection="column" flexGrow={1}>
         {logMode === "structured" ? (
           <StructuredView events={events} />
+        ) : logMode === "errors" ? (
+          <Box flexDirection="column">
+            <Text dimColor>Showing {errorEvents.length} errors of {events.length} total events</Text>
+            <StructuredView events={errorEvents} />
+          </Box>
         ) : (
           <RawLogView lines={outputLines} />
         )}

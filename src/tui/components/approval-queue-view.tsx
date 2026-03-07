@@ -10,6 +10,8 @@ interface ApprovalQueueItem {
 interface ApprovalQueueViewProps {
   items: ApprovalQueueItem[];
   blockedRuns: WorkflowRun[];
+  awaitingReviewRuns: WorkflowRun[];
+  readyToMergeRuns: WorkflowRun[];
   selectedIndex: number;
   height: number;
 }
@@ -28,8 +30,19 @@ function urgencyColor(age: number): string {
   return "white";
 }
 
-export function ApprovalQueueView({ items, blockedRuns, selectedIndex, height }: ApprovalQueueViewProps) {
+function severityColor(severity: string): string {
+  switch (severity) {
+    case "critical": return "red";
+    case "high": return "red";
+    case "medium": return "yellow";
+    case "low": return "green";
+    default: return "white";
+  }
+}
+
+export function ApprovalQueueView({ items, blockedRuns, awaitingReviewRuns, readyToMergeRuns, selectedIndex, height }: ApprovalQueueViewProps) {
   const allItems: Array<{ key: string; node: React.ReactNode }> = [];
+  let selectableIndex = 0;
 
   // Pending approvals section
   if (items.length > 0) {
@@ -37,8 +50,8 @@ export function ApprovalQueueView({ items, blockedRuns, selectedIndex, height }:
       <Text bold>Pending Approvals ({items.length})</Text>
     )});
 
-    for (const [i, item] of items.entries()) {
-      const isSelected = i === selectedIndex;
+    for (const [, item] of items.entries()) {
+      const isSelected = selectableIndex === selectedIndex;
       const age = Date.now() - new Date(item.approval.createdAt).getTime();
       const ageStr = formatAge(item.approval.createdAt);
       const ageColor = urgencyColor(age);
@@ -52,12 +65,76 @@ export function ApprovalQueueView({ items, blockedRuns, selectedIndex, height }:
           <Text color="yellow"> #{item.run?.issueNumber ?? "?"}</Text>
           {" "}
           <Text>{item.approval.phase}</Text>
+          {item.approval.recommendedAction ? <Text dimColor> {item.approval.recommendedAction}</Text> : null}
+          {item.approval.severity ? (
+            <>
+              {" "}
+              <Text color={severityColor(item.approval.severity)}>[{item.approval.severity}]</Text>
+            </>
+          ) : null}
           {" "}
           <Text dimColor>{title.length > 30 ? title.slice(0, 29) + "\u2026" : title}</Text>
           {"  "}
           <Text color={ageColor}>{ageStr}</Text>
         </Text>
       )});
+      selectableIndex++;
+    }
+  }
+
+  // Awaiting human review section
+  if (awaitingReviewRuns.length > 0) {
+    allItems.push({ key: "review-sep", node: <Text dimColor>{"\u2500".repeat(50)}</Text> });
+    allItems.push({ key: "review-hdr", node: (
+      <Text bold color="cyan">Awaiting Human Review ({awaitingReviewRuns.length})</Text>
+    )});
+
+    for (const r of awaitingReviewRuns) {
+      const title = ((r.metadata as Record<string, unknown>)?.title as string) ?? "";
+      const isSelected = selectableIndex === selectedIndex;
+
+      allItems.push({ key: `review-${r.id}`, node: (
+        <Text inverse={isSelected} bold={isSelected}>
+          {isSelected ? ">" : " "}
+          <Text color="cyan"> #{r.issueNumber}</Text>
+          {" "}
+          <Text color="cyan">review</Text>
+          {" "}
+          <Text dimColor>{title.length > 30 ? title.slice(0, 29) + "\u2026" : title}</Text>
+          {"  "}
+          <Text dimColor>{formatAge(r.updatedAt)}</Text>
+          {"  "}
+          <Text dimColor>PR: {r.prUrl ?? "no PR"}</Text>
+        </Text>
+      )});
+      selectableIndex++;
+    }
+  }
+
+  // Ready to merge section
+  if (readyToMergeRuns.length > 0) {
+    allItems.push({ key: "merge-sep", node: <Text dimColor>{"\u2500".repeat(50)}</Text> });
+    allItems.push({ key: "merge-hdr", node: (
+      <Text bold color="green">Ready to Merge ({readyToMergeRuns.length})</Text>
+    )});
+
+    for (const r of readyToMergeRuns) {
+      const title = ((r.metadata as Record<string, unknown>)?.title as string) ?? "";
+      const isSelected = selectableIndex === selectedIndex;
+
+      allItems.push({ key: `merge-${r.id}`, node: (
+        <Text inverse={isSelected} bold={isSelected}>
+          {isSelected ? ">" : " "}
+          <Text color="green"> #{r.issueNumber}</Text>
+          {" "}
+          <Text color="green">merge</Text>
+          {" "}
+          <Text dimColor>{title.length > 30 ? title.slice(0, 29) + "\u2026" : title}</Text>
+          {"  "}
+          <Text dimColor>{formatAge(r.updatedAt)}</Text>
+        </Text>
+      )});
+      selectableIndex++;
     }
   }
 
@@ -70,10 +147,8 @@ export function ApprovalQueueView({ items, blockedRuns, selectedIndex, height }:
 
     for (const r of blockedRuns) {
       const title = ((r.metadata as Record<string, unknown>)?.title as string) ?? "";
-      const idx = items.length + blockedRuns.indexOf(r);
-      const isSelected = idx === selectedIndex;
+      const isSelected = selectableIndex === selectedIndex;
 
-      // Find the reason from the latest transition
       allItems.push({ key: `blocked-${r.id}`, node: (
         <Text inverse={isSelected} bold={isSelected}>
           {isSelected ? ">" : " "}
@@ -88,12 +163,9 @@ export function ApprovalQueueView({ items, blockedRuns, selectedIndex, height }:
           <Text dimColor>{formatAge(r.updatedAt)}</Text>
         </Text>
       )});
+      selectableIndex++;
     }
   }
-
-  // Awaiting human review
-  const awaitingReview = blockedRuns.filter(() => false); // placeholder for future
-  // Could show runs in awaiting_human_review here
 
   if (allItems.length === 0) {
     allItems.push({ key: "empty", node: <Text dimColor>No pending items. All clear!</Text> });
@@ -105,7 +177,7 @@ export function ApprovalQueueView({ items, blockedRuns, selectedIndex, height }:
     <Box flexDirection="column" flexGrow={1} paddingLeft={1} paddingRight={1}>
       <Box justifyContent="space-between" flexShrink={0}>
         <Text bold color="cyan">Approval Queue</Text>
-        <Text dimColor>j/k nav  Enter open  A approve  W rework  Esc back</Text>
+        <Text dimColor>j/k nav  Enter open  A approve  W rework  O open PR  C done  Esc back</Text>
       </Box>
       <Box flexDirection="column" marginTop={1} flexGrow={1}>
         {visible.map((item) => (

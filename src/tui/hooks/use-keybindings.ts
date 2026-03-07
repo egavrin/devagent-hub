@@ -7,7 +7,7 @@ export interface KeybindingActions {
   onSelect: () => void;
   onNextPane: () => void;
   onPrevPane: () => void;
-  onSetLogMode: (mode: "structured" | "raw") => void;
+  onSetLogMode: (mode: "structured" | "raw" | "errors") => void;
   onApprove: () => void;
   onContinue: () => void;
   onRetry: () => void;

@@ -100,6 +100,8 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
     run: store.getWorkflowRun(a.workflowRunId),
   }));
   const blockedRuns = runs.filter((r) => r.status === "failed" || r.status === "escalated");
+  const awaitingReviewRuns = runs.filter((r) => r.status === "awaiting_human_review");
+  const readyToMergeRuns = runs.filter((r) => r.status === "ready_to_merge");
 
   // Active process tracking
   const [activeProcessId, setActiveProcessId] = React.useState<string | null>(null);
@@ -149,7 +151,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
 
   const handleNavigate = useCallback((direction: "up" | "down" | "left" | "right") => {
     if (ui.screen === "approvals") {
-      const totalItems = approvalQueueItems.length + blockedRuns.length;
+      const totalItems = approvalQueueItems.length + awaitingReviewRuns.length + readyToMergeRuns.length + blockedRuns.length;
       if (totalItems === 0) return;
       if (direction === "up") {
         dispatch({ type: "SET_APPROVAL_INDEX", index: Math.max(0, ui.approvalIndex - 1) });
@@ -195,20 +197,31 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
       }
     } else if (ui.screen === "approvals") {
       // Open the run for the selected approval
-      if (ui.approvalIndex < approvalQueueItems.length) {
-        const item = approvalQueueItems[ui.approvalIndex];
+      let idx = ui.approvalIndex;
+      if (idx < approvalQueueItems.length) {
+        const item = approvalQueueItems[idx];
         if (item.run) {
           dispatch({ type: "OPEN_RUN", runId: item.run.id });
         }
       } else {
-        const blockedIdx = ui.approvalIndex - approvalQueueItems.length;
-        const run = blockedRuns[blockedIdx];
-        if (run) {
-          dispatch({ type: "OPEN_RUN", runId: run.id });
+        idx -= approvalQueueItems.length;
+        if (idx < awaitingReviewRuns.length) {
+          dispatch({ type: "OPEN_RUN", runId: awaitingReviewRuns[idx].id });
+        } else {
+          idx -= awaitingReviewRuns.length;
+          if (idx < readyToMergeRuns.length) {
+            dispatch({ type: "OPEN_RUN", runId: readyToMergeRuns[idx].id });
+          } else {
+            idx -= readyToMergeRuns.length;
+            const run = blockedRuns[idx];
+            if (run) {
+              dispatch({ type: "OPEN_RUN", runId: run.id });
+            }
+          }
         }
       }
     }
-  }, [ui.screen, ui.focusedColumnIndex, ui.focusedRowIndex, ui.approvalIndex, getColumnRuns, approvalQueueItems, blockedRuns]);
+  }, [ui.screen, ui.focusedColumnIndex, ui.focusedRowIndex, ui.approvalIndex, getColumnRuns, approvalQueueItems, awaitingReviewRuns, readyToMergeRuns, blockedRuns]);
 
   // ─── Run actions ─────────────────────────────────────────────
 
@@ -513,9 +526,10 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
 
     runFn.then(
       (run) => {
-        // Store source type on the run
+        // Store source type and optional profile on the run
         store.updateWorkflowRun(run.id, {
           metadata: { ...(run.metadata as Record<string, unknown>), sourceType },
+          ...(ui.newRunForm.profile ? { agentProfile: ui.newRunForm.profile } : {}),
         });
         dispatch({ type: "OPEN_RUN", runId: run.id });
         const hint = mode === "watch" ? "" : " -- press C to continue";
@@ -680,7 +694,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
           dispatch({ type: "SELECT_RUN", runId: colRuns[lastIdx].id });
         }
       } else if (ui.screen === "approvals") {
-        const totalItems = approvalQueueItems.length + blockedRuns.length;
+        const totalItems = approvalQueueItems.length + awaitingReviewRuns.length + readyToMergeRuns.length + blockedRuns.length;
         dispatch({ type: "SET_APPROVAL_INDEX", index: Math.max(0, totalItems - 1) });
       }
     },
@@ -750,12 +764,14 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
         <ApprovalQueueView
           items={approvalQueueItems}
           blockedRuns={blockedRuns}
+          awaitingReviewRuns={awaitingReviewRuns}
+          readyToMergeRuns={readyToMergeRuns}
           selectedIndex={ui.approvalIndex}
           height={termHeight - 4}
         />
       ) : ui.screen === "runners" && config ? (
         /* ── Runners screen ──────────────────────────────── */
-        <RunnersView config={config} height={termHeight - 4} />
+        <RunnersView config={config} runs={runs} height={termHeight - 4} />
       ) : ui.screen === "autopilot" ? (
         /* ── Autopilot screen ────────────────────────────── */
         <AutopilotView
@@ -839,9 +855,11 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
         <Box position="absolute" marginTop={5} marginLeft={Math.floor((termWidth - 52) / 2)}>
           <NewRunDialog
             form={ui.newRunForm}
+            profiles={config ? Object.keys(config.profiles) : []}
             onChangeSourceType={(t) => dispatch({ type: "SET_NEW_RUN_SOURCE_TYPE", sourceType: t })}
             onChangeSourceId={(v) => dispatch({ type: "SET_NEW_RUN_SOURCE_ID", value: v })}
             onChangeMode={(m) => dispatch({ type: "SET_NEW_RUN_MODE", mode: m })}
+            onChangeProfile={(p) => dispatch({ type: "SET_NEW_RUN_PROFILE", profile: p })}
             onSubmit={handleNewRunSubmit}
             onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
           />
@@ -874,6 +892,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
                 case "continue": handleContinue(); break;
                 case "filter": dispatch({ type: "TOGGLE_FILTER" }); break;
                 case "help": dispatch({ type: "OPEN_DIALOG", dialog: "help" }); break;
+                case "errors": dispatch({ type: "SET_LOG_MODE", mode: "errors" }); break;
               }
             }}
             onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}

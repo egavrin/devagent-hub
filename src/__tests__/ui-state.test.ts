@@ -100,11 +100,11 @@ describe("uiReducer", () => {
     it("OPEN_DIALOG new-run resets form", () => {
       const withData = {
         ...initialUIState,
-        newRunForm: { sourceType: "pr" as const, sourceId: "42", mode: "watch" as const },
+        newRunForm: { sourceType: "pr" as const, sourceId: "42", mode: "watch" as const, profile: "fast" },
       };
       const s = dispatch(withData, { type: "OPEN_DIALOG", dialog: "new-run" });
       expect(s.dialog).toBe("new-run");
-      expect(s.newRunForm).toEqual({ sourceType: "issue", sourceId: "", mode: "assisted" });
+      expect(s.newRunForm).toEqual({ sourceType: "issue", sourceId: "", mode: "assisted", profile: "" });
     });
 
     it("OPEN_DIALOG rework resets note", () => {

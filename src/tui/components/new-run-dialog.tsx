@@ -5,21 +5,29 @@ import type { NewRunForm, NewRunSourceType, NewRunMode } from "../state.js";
 
 interface NewRunDialogProps {
   form: NewRunForm;
+  profiles: string[];
   onChangeSourceType: (t: NewRunSourceType) => void;
   onChangeSourceId: (v: string) => void;
   onChangeMode: (m: NewRunMode) => void;
+  onChangeProfile: (p: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
 }
 
 export function NewRunDialog({
   form,
+  profiles,
   onChangeSourceType,
   onChangeSourceId,
   onChangeMode,
+  onChangeProfile,
   onSubmit,
   onCancel,
 }: NewRunDialogProps) {
+  // Show up to 5 profiles, numbered starting at 5
+  const visibleProfiles = profiles.slice(0, 5);
+  const maxKey = 4 + visibleProfiles.length; // 4 is the last fixed key (Watch)
+
   return (
     <Box
       borderStyle="double"
@@ -53,7 +61,11 @@ export function NewRunDialog({
         <Text>{form.sourceType === "issue" ? "Issue" : "PR"} #: </Text>
         <TextInput
           value={form.sourceId}
-          onChange={onChangeSourceId}
+          onChange={(v) => {
+            // Intercept number keys for selection when not typing digits for the ID
+            // TextInput handles the sourceId; key handling is done via onChange filtering
+            onChangeSourceId(v);
+          }}
           onSubmit={onSubmit}
         />
       </Box>
@@ -76,8 +88,37 @@ export function NewRunDialog({
         </Text>
       </Box>
 
+      {visibleProfiles.length > 0 && (
+        <Box marginTop={1} gap={1} flexWrap="wrap">
+          <Text>Profile:</Text>
+          <Text
+            bold={form.profile === ""}
+            color={form.profile === "" ? "magenta" : "gray"}
+            underline={form.profile === ""}
+          >
+            [0] default
+          </Text>
+          {visibleProfiles.map((name, i) => {
+            const key = 5 + i;
+            const selected = form.profile === name;
+            return (
+              <Text
+                key={name}
+                bold={selected}
+                color={selected ? "magenta" : "gray"}
+                underline={selected}
+              >
+                [{key}] {name}
+              </Text>
+            );
+          })}
+        </Box>
+      )}
+
       <Box marginTop={1}>
-        <Text dimColor>Enter submit  1/2 source  3/4 mode  Esc cancel</Text>
+        <Text dimColor>
+          Enter submit  1-{maxKey} select  {visibleProfiles.length > 0 ? "0 default  " : ""}Esc cancel
+        </Text>
       </Box>
     </Box>
   );

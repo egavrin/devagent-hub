@@ -11,6 +11,7 @@ const COMMANDS = [
   "continue",
   "filter",
   "help",
+  "errors",
 ] as const;
 
 export type PaletteCommand = (typeof COMMANDS)[number];

@@ -60,6 +60,8 @@ function approvalHints(): HintEntry[] {
     { key: "Enter", label: "open run" },
     { key: "A", label: "approve" },
     { key: "W", label: "rework" },
+    { key: "O", label: "open PR" },
+    { key: "C", label: "done" },
     { key: "Esc", label: "back" },
     { key: "Q", label: "quit" },
   ];
@@ -68,7 +70,7 @@ function approvalHints(): HintEntry[] {
 function runHints(status: string | null, hasActiveProcess: boolean): HintEntry[] {
   const hints: HintEntry[] = [
     { key: "Tab", label: "pane" },
-    { key: "S/L", label: "log mode" },
+    { key: "S/L/E", label: "log mode" },
     { key: "Esc", label: "back" },
   ];
 
