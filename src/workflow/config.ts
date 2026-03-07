@@ -13,10 +13,10 @@ const VALID_REASONING_LEVELS = new Set([
 ]);
 
 export const VALID_MODES = new Set([
-  "assisted", "watch",
+  "assisted", "watch", "autopilot",
 ] as const);
 
-export type WorkflowMode = "assisted" | "watch";
+export type WorkflowMode = "assisted" | "watch" | "autopilot";
 
 export class WorkflowConfigError extends Error {
   constructor(message: string) {
@@ -47,6 +47,13 @@ export interface WorkflowConfig {
   pr: { draft: boolean; open_requires: string[] };
   repair: { max_rounds: number };
   handoff: { when: string[] };
+  autopilot: {
+    poll_interval_seconds: number;
+    max_concurrent_runs: number;
+    eligible_labels: string[];
+    priority_labels: string[];
+    exclude_labels: string[];
+  };
 }
 
 export function defaultConfig(): WorkflowConfig {
@@ -70,6 +77,13 @@ export function defaultConfig(): WorkflowConfig {
     pr: { draft: true, open_requires: ["verify"] },
     repair: { max_rounds: 3 },
     handoff: { when: ["repair_failed", "review_rejected"] },
+    autopilot: {
+      poll_interval_seconds: 120,
+      max_concurrent_runs: 2,
+      eligible_labels: ["devagent"],
+      priority_labels: ["priority", "urgent", "critical"],
+      exclude_labels: ["blocked", "wontfix", "duplicate"],
+    },
   };
 }
 
