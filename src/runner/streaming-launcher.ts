@@ -3,6 +3,8 @@ import { join } from "path";
 import type { LauncherConfig } from "./launcher.js";
 import type { ManagedProcess } from "./managed-process.js";
 import type { ProcessRegistry } from "./process-registry.js";
+import { buildLaunchArgs } from "./args-builder.js";
+import type { LaunchOptions } from "./args-builder.js";
 
 export interface StreamingLauncherConfig extends LauncherConfig {
   registry: ProcessRegistry;
@@ -39,30 +41,30 @@ export class StreamingLauncher {
     const outputPath = join(runDir, `${phase}-output.json`);
     const eventsPath = join(runDir, `${phase}-events.jsonl`);
 
-    const args: string[] = [
-      "workflow", "run",
-      "--phase", phase,
-      "--input", inputPath,
-      "--output", outputPath,
-      "--events", eventsPath,
-      "--repo", repoPath,
-    ];
+    // Use shared arg builder (validates phase, approval mode, reasoning)
+    const launchOptions: LaunchOptions = {
+      provider: this.config.provider,
+      model: this.config.model,
+      maxIterations: this.config.maxIterations,
+      approvalMode: this.config.approvalMode,
+      reasoning: this.config.reasoning,
+    };
 
-    if (this.config.provider) args.push("--provider", this.config.provider);
-    if (this.config.model) args.push("--model", this.config.model);
-    if (this.config.maxIterations !== undefined && this.config.maxIterations > 0) {
-      args.push("--max-iterations", String(this.config.maxIterations));
-    } else if (this.config.maxIterations === 0) {
-      args.push("--max-iterations", "999999");
-    }
-    if (this.config.approvalMode) args.push("--approval", this.config.approvalMode);
-    if (this.config.reasoning) args.push("--reasoning", this.config.reasoning);
+    const args = buildLaunchArgs(
+      { phase, repoPath, inputPath, outputPath, eventsPath },
+      launchOptions,
+    );
+
+    // Support compound bin like "bun /path/to/index.js"
+    const binParts = devagentBin.split(/\s+/);
+    const bin = binParts[0];
+    const binArgs = [...binParts.slice(1), ...args];
 
     const managedProcess = this.config.registry.spawn({
       id: `${runId}-${phase}`,
       phase,
-      bin: devagentBin,
-      args,
+      bin,
+      args: binArgs,
       cwd: repoPath,
       timeout,
     });

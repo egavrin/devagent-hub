@@ -23,17 +23,24 @@ export class WorktreeManager {
   }
 
   /**
-   * Create a worktree for a given issue number.
-   * Branch: da/issue-<number>, path: <baseDir>/issue-<number>.
+   * Create a worktree for a given issue number and run.
+   * Branch: da/issue-<number>/run-<runId>, path: <baseDir>/issue-<number>-run-<runId>.
+   * If runId is omitted, falls back to da/issue-<number> (legacy behavior).
    * If the worktree already exists, returns its info without recreating.
    */
   create(
     issueNumber: number,
     repoRoot: string,
     baseBranch = "main",
+    runId?: string,
   ): WorktreeInfo {
-    const branch = `da/issue-${issueNumber}`;
-    const worktreePath = join(this.baseDir, `issue-${issueNumber}`);
+    const runSuffix = runId ? runId.slice(0, 8) : "";
+    const branch = runSuffix
+      ? `da/issue-${issueNumber}/run-${runSuffix}`
+      : `da/issue-${issueNumber}`;
+    const worktreePath = runSuffix
+      ? join(this.baseDir, `issue-${issueNumber}-run-${runSuffix}`)
+      : join(this.baseDir, `issue-${issueNumber}`);
 
     // If the worktree directory already exists, return existing info
     if (existsSync(worktreePath)) {
@@ -63,16 +70,22 @@ export class WorktreeManager {
   }
 
   /**
-   * Force-remove a worktree for a given issue number.
+   * Force-remove a worktree for a given issue number (and optional run).
    * Optionally deletes the branch as well.
    */
   remove(
     issueNumber: number,
     repoRoot: string,
     deleteBranch = false,
+    runId?: string,
   ): void {
-    const worktreePath = join(this.baseDir, `issue-${issueNumber}`);
-    const branch = `da/issue-${issueNumber}`;
+    const runSuffix = runId ? runId.slice(0, 8) : "";
+    const worktreePath = runSuffix
+      ? join(this.baseDir, `issue-${issueNumber}-run-${runSuffix}`)
+      : join(this.baseDir, `issue-${issueNumber}`);
+    const branch = runSuffix
+      ? `da/issue-${issueNumber}/run-${runSuffix}`
+      : `da/issue-${issueNumber}`;
 
     // Force-remove the worktree
     try {
