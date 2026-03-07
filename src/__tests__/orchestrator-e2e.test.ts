@@ -48,7 +48,7 @@ describe("WorkflowOrchestrator — end-to-end", () => {
     });
     launcher.setResponse("review", {
       exitCode: 0,
-      output: { result: { blockingCount: 0, verdict: "pass" }, summary: "Clean" },
+      output: { findings: [], blockingCount: 0, verdict: "pass", summary: "Clean" },
     });
 
     const run = await orchestrator.runWorkflow(100, { autoApprove: true });
@@ -96,7 +96,7 @@ describe("WorkflowOrchestrator — end-to-end", () => {
             exitCode: 0,
             outputPath: `/tmp/mock/${params.runId}/review-output.json`,
             eventsPath: `/tmp/mock/${params.runId}/review-events.jsonl`,
-            output: { result: { blockingCount: 1, verdict: "block" }, summary: "1 issue" },
+            output: { findings: [{ severity: "blocking", file: "a.ts", message: "Bug" }], blockingCount: 1, verdict: "block", summary: "1 issue" },
           };
         }
         launcher.launches.push(params);
@@ -104,14 +104,14 @@ describe("WorkflowOrchestrator — end-to-end", () => {
           exitCode: 0,
           outputPath: `/tmp/mock/${params.runId}/review-output.json`,
           eventsPath: `/tmp/mock/${params.runId}/review-events.jsonl`,
-          output: { result: { blockingCount: 0, verdict: "pass" }, summary: "Clean" },
+          output: { findings: [], blockingCount: 0, verdict: "pass", summary: "Clean" },
         };
       }
       return origLaunch(params);
     };
     launcher.setResponse("repair", {
       exitCode: 0,
-      output: { result: { fixedFindings: 1, remainingFindings: 0 }, summary: "Fixed" },
+      output: { fixedFindings: ["Fixed bug in a.ts"], remainingFindings: 0, changedFiles: ["a.ts"], verificationPassed: true, summary: "Fixed" },
     });
 
     const run = await orchestrator.runWorkflow(101, { autoApprove: true });

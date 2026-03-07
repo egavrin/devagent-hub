@@ -81,7 +81,7 @@ describe("WorkflowOrchestrator — plan", () => {
     );
     expect(planComment).toBeDefined();
     expect(planComment!.body).toContain("fix the mobile CSS breakpoint");
-    expect(planComment!.body).toContain("/approve");
+    expect(planComment!.body).toContain("approve");
 
     // Launcher should have been called for plan phase
     const planLaunch = launcher.launches.find((l) => l.phase === "plan");

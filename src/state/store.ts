@@ -4,7 +4,12 @@ import type {
   WorkflowStatus,
   AgentRun,
   StatusTransition,
+  Artifact,
+  ArtifactType,
+  ApprovalRequest,
+  ApprovalAction,
 } from "./types.js";
+import { assertTransition } from "../workflow/state-machine.js";
 
 const MIGRATIONS = `
 CREATE TABLE IF NOT EXISTS workflow_runs (
@@ -48,6 +53,32 @@ CREATE TABLE IF NOT EXISTS status_transitions (
   reason TEXT NOT NULL,
   FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
 );
+
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  workflow_run_id TEXT NOT NULL,
+  agent_run_id TEXT,
+  type TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  data TEXT NOT NULL DEFAULT '{}',
+  file_path TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id),
+  FOREIGN KEY (agent_run_id) REFERENCES agent_runs(id)
+);
+
+CREATE TABLE IF NOT EXISTS approval_requests (
+  id TEXT PRIMARY KEY,
+  workflow_run_id TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  action TEXT,
+  summary TEXT NOT NULL DEFAULT '',
+  reviewer_comment TEXT,
+  resolved_at TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
+);
 `;
 
 interface WorkflowRunRow {
@@ -86,6 +117,56 @@ interface TransitionRow {
   to_status: string;
   timestamp: string;
   reason: string;
+}
+
+interface ArtifactRow {
+  id: string;
+  workflow_run_id: string;
+  agent_run_id: string | null;
+  type: string;
+  phase: string;
+  summary: string;
+  data: string;
+  file_path: string | null;
+  created_at: string;
+}
+
+interface ApprovalRequestRow {
+  id: string;
+  workflow_run_id: string;
+  phase: string;
+  action: string | null;
+  summary: string;
+  reviewer_comment: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+function rowToArtifact(row: ArtifactRow): Artifact {
+  return {
+    id: row.id,
+    workflowRunId: row.workflow_run_id,
+    agentRunId: row.agent_run_id,
+    type: row.type as ArtifactType,
+    phase: row.phase,
+    summary: row.summary,
+    data: JSON.parse(row.data),
+    filePath: row.file_path,
+    createdAt: row.created_at,
+  };
+}
+
+function rowToApprovalRequest(row: ApprovalRequestRow): ApprovalRequest {
+  return {
+    id: row.id,
+    workflowRunId: row.workflow_run_id,
+    phase: row.phase,
+    action: row.action as ApprovalAction | null,
+    summary: row.summary,
+    reviewerComment: row.reviewer_comment,
+    resolvedAt: row.resolved_at,
+    createdAt: row.created_at,
+  };
 }
 
 function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
@@ -184,6 +265,9 @@ export class StateStore {
 
     const now = new Date().toISOString();
     const from = current.status;
+
+    // Enforce valid state transitions
+    assertTransition(from, to);
 
     this.db
       .prepare(
@@ -349,9 +433,129 @@ export class StateStore {
   }
 
   deleteWorkflowRun(id: string): void {
+    this.db.prepare("DELETE FROM approval_requests WHERE workflow_run_id = ?").run(id);
+    this.db.prepare("DELETE FROM artifacts WHERE workflow_run_id = ?").run(id);
     this.db.prepare("DELETE FROM status_transitions WHERE workflow_run_id = ?").run(id);
     this.db.prepare("DELETE FROM agent_runs WHERE workflow_run_id = ?").run(id);
     this.db.prepare("DELETE FROM workflow_runs WHERE id = ?").run(id);
+  }
+
+  // ─── Artifacts ────────────────────────────────────────────
+
+  createArtifact(opts: {
+    workflowRunId: string;
+    agentRunId?: string;
+    type: ArtifactType;
+    phase: string;
+    summary: string;
+    data: Record<string, unknown>;
+    filePath?: string;
+  }): Artifact {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    this.db
+      .prepare(
+        `INSERT INTO artifacts (id, workflow_run_id, agent_run_id, type, phase, summary, data, file_path, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        opts.workflowRunId,
+        opts.agentRunId ?? null,
+        opts.type,
+        opts.phase,
+        opts.summary,
+        JSON.stringify(opts.data),
+        opts.filePath ?? null,
+        now,
+      );
+
+    return this.getArtifact(id)!;
+  }
+
+  getArtifact(id: string): Artifact | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM artifacts WHERE id = ?")
+      .get(id) as ArtifactRow | null;
+    return row ? rowToArtifact(row) : undefined;
+  }
+
+  getArtifactsByWorkflow(workflowRunId: string): Artifact[] {
+    const rows = this.db
+      .prepare("SELECT * FROM artifacts WHERE workflow_run_id = ? ORDER BY created_at")
+      .all(workflowRunId) as ArtifactRow[];
+    return rows.map(rowToArtifact);
+  }
+
+  getLatestArtifact(
+    workflowRunId: string,
+    type: ArtifactType,
+  ): Artifact | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM artifacts WHERE workflow_run_id = ? AND type = ? ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(workflowRunId, type) as ArtifactRow | null;
+    return row ? rowToArtifact(row) : undefined;
+  }
+
+  // ─── Approval Requests ─────────────────────────────────────
+
+  createApprovalRequest(opts: {
+    workflowRunId: string;
+    phase: string;
+    summary: string;
+  }): ApprovalRequest {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    this.db
+      .prepare(
+        `INSERT INTO approval_requests (id, workflow_run_id, phase, summary, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(id, opts.workflowRunId, opts.phase, opts.summary, now);
+
+    return this.getApprovalRequest(id)!;
+  }
+
+  getApprovalRequest(id: string): ApprovalRequest | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM approval_requests WHERE id = ?")
+      .get(id) as ApprovalRequestRow | null;
+    return row ? rowToApprovalRequest(row) : undefined;
+  }
+
+  getPendingApproval(workflowRunId: string): ApprovalRequest | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM approval_requests WHERE workflow_run_id = ? AND action IS NULL ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(workflowRunId) as ApprovalRequestRow | null;
+    return row ? rowToApprovalRequest(row) : undefined;
+  }
+
+  resolveApprovalRequest(
+    id: string,
+    action: ApprovalAction,
+    reviewerComment?: string,
+  ): ApprovalRequest {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        "UPDATE approval_requests SET action = ?, reviewer_comment = ?, resolved_at = ? WHERE id = ?",
+      )
+      .run(action, reviewerComment ?? null, now, id);
+
+    return this.getApprovalRequest(id)!;
+  }
+
+  getApprovalsByWorkflow(workflowRunId: string): ApprovalRequest[] {
+    const rows = this.db
+      .prepare("SELECT * FROM approval_requests WHERE workflow_run_id = ? ORDER BY created_at")
+      .all(workflowRunId) as ApprovalRequestRow[];
+    return rows.map(rowToApprovalRequest);
   }
 
   close(): void {

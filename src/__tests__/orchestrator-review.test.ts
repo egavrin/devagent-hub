@@ -61,8 +61,7 @@ describe("WorkflowOrchestrator — review", () => {
     launcher.setResponse("review", {
       exitCode: 0,
       output: {
-        schemaVersion: 1, phase: "review",
-        result: { findings: [], blockingCount: 0, warningCount: 0, infoCount: 0, verdict: "pass" },
+        findings: [], blockingCount: 0, verdict: "pass",
         summary: "No issues found.",
       },
     });
@@ -76,11 +75,8 @@ describe("WorkflowOrchestrator — review", () => {
     launcher.setResponse("review", {
       exitCode: 0,
       output: {
-        schemaVersion: 1, phase: "review",
-        result: {
-          findings: [{ severity: "blocking", file: "src/a.ts", message: "Missing null check" }],
-          blockingCount: 1, warningCount: 0, infoCount: 0, verdict: "block",
-        },
+        findings: [{ severity: "blocking", file: "src/a.ts", message: "Missing null check" }],
+        blockingCount: 1, verdict: "block",
         summary: "1 blocking issue found.",
       },
     });
@@ -94,15 +90,16 @@ describe("WorkflowOrchestrator — review", () => {
     launcher.setResponse("review", {
       exitCode: 0,
       output: {
-        result: { findings: [{ severity: "blocking", file: "a.ts", message: "Bug" }], blockingCount: 1, verdict: "block" },
+        findings: [{ severity: "blocking", file: "a.ts", message: "Bug" }],
+        blockingCount: 1, verdict: "block",
         summary: "1 blocking issue.",
       },
     });
     launcher.setResponse("repair", {
       exitCode: 0,
       output: {
-        schemaVersion: 1, phase: "repair",
-        result: { round: 1, inputFindings: 1, fixedFindings: 1, remainingFindings: 0, filesModified: ["a.ts"], verificationPassed: true },
+        fixedFindings: ["Fixed bug in a.ts"], remainingFindings: 0,
+        changedFiles: ["a.ts"], verificationPassed: true,
         summary: "Fixed 1 issue.",
       },
     });
@@ -118,11 +115,19 @@ describe("WorkflowOrchestrator — review", () => {
     await driveToOpenPR(46);
     launcher.setResponse("review", {
       exitCode: 0,
-      output: { result: { blockingCount: 1, verdict: "block" }, summary: "Issue." },
+      output: {
+        findings: [{ severity: "blocking", file: "a.ts", message: "Bug" }],
+        blockingCount: 1, verdict: "block",
+        summary: "Issue.",
+      },
     });
     launcher.setResponse("repair", {
       exitCode: 0,
-      output: { result: { remainingFindings: 1, verificationPassed: false }, summary: "Could not fix." },
+      output: {
+        fixedFindings: [], remainingFindings: 1,
+        changedFiles: [], verificationPassed: false,
+        summary: "Could not fix.",
+      },
     });
 
     // Round 1

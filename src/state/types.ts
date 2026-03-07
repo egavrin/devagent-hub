@@ -41,3 +41,43 @@ export interface StatusTransition {
   timestamp: string;
   reason: string;
 }
+
+// ─── Artifacts ───────────────────────────────────────────────
+
+export type ArtifactType =
+  | "triage_report"
+  | "plan_draft"
+  | "accepted_plan"
+  | "implementation_report"
+  | "verification_report"
+  | "review_report"
+  | "repair_report"
+  | "diff_summary"
+  | "stderr";
+
+export interface Artifact {
+  id: string;
+  workflowRunId: string;
+  agentRunId: string | null;
+  type: ArtifactType;
+  phase: string;
+  summary: string;
+  data: Record<string, unknown>;
+  filePath: string | null;
+  createdAt: string;
+}
+
+// ─── Approval Requests ──────────────────────────────────────
+
+export type ApprovalAction = "approve" | "rework";
+
+export interface ApprovalRequest {
+  id: string;
+  workflowRunId: string;
+  phase: string;
+  action: ApprovalAction | null;
+  summary: string;
+  reviewerComment: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+}
