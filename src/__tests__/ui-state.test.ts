@@ -100,11 +100,11 @@ describe("uiReducer", () => {
     it("OPEN_DIALOG new-run resets form", () => {
       const withData = {
         ...initialUIState,
-        newRunForm: { sourceType: "pr" as const, sourceId: "42", mode: "watch" as const, profile: "fast" },
+        newRunForm: { sourceType: "pr" as const, sourceId: "42", mode: "watch" as const, profile: "fast", runner: "claude", model: "sonnet" },
       };
       const s = dispatch(withData, { type: "OPEN_DIALOG", dialog: "new-run" });
       expect(s.dialog).toBe("new-run");
-      expect(s.newRunForm).toEqual({ sourceType: "issue", sourceId: "", mode: "assisted", profile: "" });
+      expect(s.newRunForm).toEqual({ sourceType: "issue", sourceId: "", mode: "assisted", profile: "", runner: "", model: "" });
     });
 
     it("OPEN_DIALOG rework resets note", () => {
@@ -163,7 +163,7 @@ describe("uiReducer", () => {
         { type: "SET_NEW_RUN_SOURCE_ID", value: "99" },
         { type: "SET_NEW_RUN_MODE", mode: "watch" },
       );
-      expect(s.newRunForm).toEqual({ sourceType: "pr", sourceId: "99", mode: "watch", profile: "" });
+      expect(s.newRunForm).toEqual({ sourceType: "pr", sourceId: "99", mode: "watch", profile: "", runner: "", model: "" });
     });
   });
 
@@ -346,7 +346,7 @@ describe("uiReducer", () => {
         { type: "SET_NEW_RUN_SOURCE_ID", value: "42" },
         { type: "SET_NEW_RUN_MODE", mode: "watch" },
       );
-      expect(s.newRunForm).toEqual({ sourceType: "pr", sourceId: "42", mode: "watch", profile: "" });
+      expect(s.newRunForm).toEqual({ sourceType: "pr", sourceId: "42", mode: "watch", profile: "", runner: "", model: "" });
 
       // Cancel — Esc (BACK)
       s = dispatch(s, { type: "BACK" });

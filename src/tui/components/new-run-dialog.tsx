@@ -6,10 +6,13 @@ import type { NewRunForm, NewRunSourceType, NewRunMode } from "../state.js";
 interface NewRunDialogProps {
   form: NewRunForm;
   profiles: string[];
+  runners: string[];
   onChangeSourceType: (t: NewRunSourceType) => void;
   onChangeSourceId: (v: string) => void;
   onChangeMode: (m: NewRunMode) => void;
   onChangeProfile: (p: string) => void;
+  onChangeRunner: (r: string) => void;
+  onChangeModel: (m: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
 }
@@ -17,16 +20,17 @@ interface NewRunDialogProps {
 export function NewRunDialog({
   form,
   profiles,
+  runners,
   onChangeSourceType,
   onChangeSourceId,
   onChangeMode,
   onChangeProfile,
+  onChangeRunner,
+  onChangeModel,
   onSubmit,
   onCancel,
 }: NewRunDialogProps) {
-  // Show up to 5 profiles, numbered starting at 5
   const visibleProfiles = profiles.slice(0, 5);
-  const maxKey = 4 + visibleProfiles.length; // 4 is the last fixed key (Watch)
 
   return (
     <Box
@@ -35,10 +39,11 @@ export function NewRunDialog({
       flexDirection="column"
       paddingLeft={1}
       paddingRight={1}
-      width={50}
+      width={58}
     >
       <Text bold color="green">New Run</Text>
 
+      {/* Source type */}
       <Box marginTop={1} gap={2}>
         <Text>Source:</Text>
         <Text
@@ -57,20 +62,18 @@ export function NewRunDialog({
         </Text>
       </Box>
 
+      {/* Source ID */}
       <Box marginTop={1}>
         <Text>{form.sourceType === "issue" ? "Issue" : "PR"} #: </Text>
         <TextInput
           value={form.sourceId}
-          onChange={(v) => {
-            // Intercept number keys for selection when not typing digits for the ID
-            // TextInput handles the sourceId; key handling is done via onChange filtering
-            onChangeSourceId(v);
-          }}
+          onChange={onChangeSourceId}
           onSubmit={onSubmit}
         />
       </Box>
 
-      <Box marginTop={1} gap={2}>
+      {/* Mode */}
+      <Box marginTop={1} gap={1}>
         <Text>Mode:</Text>
         <Text
           bold={form.mode === "assisted"}
@@ -86,8 +89,16 @@ export function NewRunDialog({
         >
           [4] Watch
         </Text>
+        <Text
+          bold={form.mode === "autopilot-once"}
+          color={form.mode === "autopilot-once" ? "red" : "gray"}
+          underline={form.mode === "autopilot-once"}
+        >
+          [5] Auto-once
+        </Text>
       </Box>
 
+      {/* Profile */}
       {visibleProfiles.length > 0 && (
         <Box marginTop={1} gap={1} flexWrap="wrap">
           <Text>Profile:</Text>
@@ -99,7 +110,7 @@ export function NewRunDialog({
             [0] default
           </Text>
           {visibleProfiles.map((name, i) => {
-            const key = 5 + i;
+            const key = 6 + i;
             const selected = form.profile === name;
             return (
               <Text
@@ -115,9 +126,42 @@ export function NewRunDialog({
         </Box>
       )}
 
+      {/* Runner */}
+      {runners.length > 1 && (
+        <Box marginTop={1} gap={1} flexWrap="wrap">
+          <Text>Runner:</Text>
+          <Text
+            bold={form.runner === ""}
+            color={form.runner === "" ? "blue" : "gray"}
+            underline={form.runner === ""}
+          >
+            auto
+          </Text>
+          {runners.map((name) => {
+            const selected = form.runner === name;
+            return (
+              <Text
+                key={name}
+                bold={selected}
+                color={selected ? "blue" : "gray"}
+              >
+                {" "}{name}{selected ? "*" : ""}
+              </Text>
+            );
+          })}
+          <Text dimColor> (Tab to cycle)</Text>
+        </Box>
+      )}
+
+      {/* Model override */}
+      <Box marginTop={1}>
+        <Text>Model: </Text>
+        <Text dimColor>{form.model || "(from profile)"}</Text>
+      </Box>
+
       <Box marginTop={1}>
         <Text dimColor>
-          Enter submit  1-{maxKey} select  {visibleProfiles.length > 0 ? "0 default  " : ""}Esc cancel
+          Enter submit  Esc cancel
         </Text>
       </Box>
     </Box>

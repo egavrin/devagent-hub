@@ -662,6 +662,13 @@ export class StateStore {
     return rows.map(rowToAgentRun);
   }
 
+  getRecentAgentRuns(limit = 50): AgentRun[] {
+    const rows = this.db
+      .prepare("SELECT * FROM agent_runs ORDER BY started_at DESC LIMIT ?")
+      .all(limit) as AgentRunRow[];
+    return rows.map(rowToAgentRun);
+  }
+
   deleteWorkflowRun(id: string): void {
     this.db.prepare("DELETE FROM approval_requests WHERE workflow_run_id = ?").run(id);
     this.db.prepare("DELETE FROM artifacts WHERE workflow_run_id = ?").run(id);

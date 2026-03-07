@@ -25,6 +25,7 @@ import type { ApprovalQueueItem } from "./components/approval-queue-view.js";
 import { WhyPausedPanel } from "./components/why-paused-panel.js";
 import { AutopilotBar } from "./components/autopilot-bar.js";
 import { RunnersView } from "./components/runners-view.js";
+import type { RunnerInfo } from "./components/runners-view.js";
 import { AutopilotView } from "./components/autopilot-view.js";
 import { RerunDialog } from "./components/rerun-dialog.js";
 import { SettingsView } from "./components/settings-view.js";
@@ -71,6 +72,42 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
   const [autopilotRunning, setAutopilotRunning] = useState(false);
   const [autopilotStats, setAutopilotStats] = useState({ lastPoll: null as string | null, activeCount: 0, totalDispatched: 0 });
   const autopilotAbort = useRef<AbortController | null>(null);
+
+  // Runner discovery state
+  const [runnerInfos, setRunnerInfos] = useState<RunnerInfo[]>([]);
+  const [runnerBins, setRunnerBins] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!config) return;
+    // Discover runners from config profiles
+    const bins = new Set<string>();
+    for (const profile of Object.values(config.profiles)) {
+      bins.add(profile.bin ?? config.runner.bin ?? "devagent");
+    }
+    bins.add(config.runner.bin ?? "devagent");
+    setRunnerBins([...bins]);
+
+    // Async runner capability discovery
+    import("../runner/launcher.js").then(({ describeRunner }) => {
+      const infos: RunnerInfo[] = [];
+      for (const bin of bins) {
+        try {
+          const desc = describeRunner(bin);
+          infos.push({
+            bin,
+            version: desc?.version ?? null,
+            supportedPhases: desc?.supportedPhases ?? [],
+            availableProviders: desc?.availableProviders ?? [],
+            supportedApprovalModes: desc?.supportedApprovalModes ?? [],
+            healthy: desc !== null,
+          });
+        } catch {
+          infos.push({ bin, version: null, supportedPhases: [], availableProviders: [], supportedApprovalModes: [], healthy: false });
+        }
+      }
+      setRunnerInfos(infos);
+    }).catch(() => {});
+  }, [config]);
 
   const selectedRun = runs.find((r) => r.id === ui.selectedRunId) ?? null;
 
@@ -513,13 +550,14 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
       showStatus("Invalid number");
       return;
     }
-    const { sourceType, mode } = ui.newRunForm;
+    const { sourceType, mode, profile, model } = ui.newRunForm;
     dispatch({ type: "CLOSE_DIALOG" });
 
-    const label = mode === "watch" ? "Running (watch)" : "Triaging";
+    const isAutoMode = mode === "watch" || mode === "autopilot-once";
+    const label = mode === "watch" ? "Running (watch)" : mode === "autopilot-once" ? "Running (autopilot-once)" : "Triaging";
     showStatus(`${label} ${sourceType} #${sourceId}...`);
 
-    const runFn = mode === "watch"
+    const runFn = isAutoMode
       ? orchestrator.runWorkflow(sourceId)
       : sourceType === "pr"
         ? orchestrator.triageFromPR(sourceId)
@@ -527,13 +565,15 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
 
     runFn.then(
       (run) => {
-        // Store source type and optional profile on the run
-        store.updateWorkflowRun(run.id, {
+        // Store source type, profile, and model overrides on the run
+        const updates: Record<string, unknown> = {
           metadata: { ...(run.metadata as Record<string, unknown>), sourceType },
-          ...(ui.newRunForm.profile ? { agentProfile: ui.newRunForm.profile } : {}),
-        });
+        };
+        if (profile) (updates as any).agentProfile = profile;
+        if (model) (updates as any).requestedModel = model;
+        store.updateWorkflowRun(run.id, updates as any);
         dispatch({ type: "OPEN_RUN", runId: run.id });
-        const hint = mode === "watch" ? "" : " -- press C to continue";
+        const hint = isAutoMode ? "" : " -- press C to continue";
         showStatus(`#${sourceId}: ${run.status}${hint}`);
       },
       (err: unknown) => {
@@ -773,7 +813,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
         />
       ) : ui.screen === "runners" && config ? (
         /* ── Runners screen ──────────────────────────────── */
-        <RunnersView config={config} runs={runs} height={termHeight - 4} />
+        <RunnersView config={config} runs={runs} agentRuns={store.getRecentAgentRuns()} runnerInfos={runnerInfos} height={termHeight - 4} />
       ) : ui.screen === "autopilot" ? (
         /* ── Autopilot screen ────────────────────────────── */
         <AutopilotView
@@ -858,10 +898,13 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
           <NewRunDialog
             form={ui.newRunForm}
             profiles={config ? Object.keys(config.profiles) : []}
+            runners={runnerBins}
             onChangeSourceType={(t) => dispatch({ type: "SET_NEW_RUN_SOURCE_TYPE", sourceType: t })}
             onChangeSourceId={(v) => dispatch({ type: "SET_NEW_RUN_SOURCE_ID", value: v })}
             onChangeMode={(m) => dispatch({ type: "SET_NEW_RUN_MODE", mode: m })}
             onChangeProfile={(p) => dispatch({ type: "SET_NEW_RUN_PROFILE", profile: p })}
+            onChangeRunner={(r) => dispatch({ type: "SET_NEW_RUN_RUNNER", runner: r })}
+            onChangeModel={(m) => dispatch({ type: "SET_NEW_RUN_MODEL", model: m })}
             onSubmit={handleNewRunSubmit}
             onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
           />

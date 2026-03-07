@@ -7,13 +7,15 @@ export type LogMode = "structured" | "raw" | "errors";
 export type Dialog = null | "new-run" | "rework" | "command-palette" | "help" | "rerun";
 
 export type NewRunSourceType = "issue" | "pr";
-export type NewRunMode = "assisted" | "watch";
+export type NewRunMode = "assisted" | "watch" | "autopilot-once";
 
 export interface NewRunForm {
   sourceType: NewRunSourceType;
   sourceId: string;
   mode: NewRunMode;
   profile: string;  // selected profile name, empty = default
+  runner: string;   // runner binary name, empty = default from config
+  model: string;    // model override, empty = from profile
 }
 
 export interface UIState {
@@ -49,6 +51,8 @@ export type UIAction =
   | { type: "SET_NEW_RUN_SOURCE_ID"; value: string }
   | { type: "SET_NEW_RUN_MODE"; mode: NewRunMode }
   | { type: "SET_NEW_RUN_PROFILE"; profile: string }
+  | { type: "SET_NEW_RUN_RUNNER"; runner: string }
+  | { type: "SET_NEW_RUN_MODEL"; model: string }
   | { type: "SET_REWORK_NOTE"; value: string }
   | { type: "SET_FOCUSED_COLUMN"; index: number }
   | { type: "SET_FOCUSED_ROW"; index: number }
@@ -70,7 +74,7 @@ export const initialUIState: UIState = {
   logMode: "structured",
   inputMode: false,
   dialog: null,
-  newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted", profile: "" },
+  newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted", profile: "", runner: "", model: "" },
   reworkNote: "",
   focusedColumnIndex: 0,
   focusedRowIndex: 0,
@@ -116,7 +120,7 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
         ...state,
         dialog: action.dialog,
         ...(action.dialog === "new-run"
-          ? { newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted", profile: "" } }
+          ? { newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted", profile: "", runner: "", model: "" } }
           : {}),
         ...(action.dialog === "rework" ? { reworkNote: "" } : {}),
         ...(action.dialog === "rerun" ? { rerunProfileIndex: 0 } : {}),
@@ -136,6 +140,12 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
 
     case "SET_NEW_RUN_PROFILE":
       return { ...state, newRunForm: { ...state.newRunForm, profile: action.profile } };
+
+    case "SET_NEW_RUN_RUNNER":
+      return { ...state, newRunForm: { ...state.newRunForm, runner: action.runner } };
+
+    case "SET_NEW_RUN_MODEL":
+      return { ...state, newRunForm: { ...state.newRunForm, model: action.model } };
 
     case "SET_REWORK_NOTE":
       return { ...state, reworkNote: action.value };
