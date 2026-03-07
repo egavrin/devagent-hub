@@ -558,6 +558,20 @@ export class StateStore {
     return rows.map(rowToApprovalRequest);
   }
 
+  listPendingApprovals(): ApprovalRequest[] {
+    const rows = this.db
+      .prepare("SELECT * FROM approval_requests WHERE action IS NULL ORDER BY created_at")
+      .all() as ApprovalRequestRow[];
+    return rows.map(rowToApprovalRequest);
+  }
+
+  listAll(): WorkflowRun[] {
+    const rows = this.db
+      .prepare("SELECT * FROM workflow_runs ORDER BY updated_at DESC")
+      .all() as WorkflowRunRow[];
+    return rows.map(rowToWorkflowRun);
+  }
+
   close(): void {
     this.db.close();
   }

@@ -1,10 +1,12 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { WorkflowRun } from "../../state/types.js";
+import type { WorkflowRun, Artifact } from "../../state/types.js";
 
 interface RunHeaderProps {
   run: WorkflowRun;
   isActive: boolean;
+  mode?: "assisted" | "watch";
+  gateVerdicts?: Artifact[];
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -52,7 +54,26 @@ function nextActionHint(status: string): string {
   }
 }
 
-export function RunHeader({ run, isActive }: RunHeaderProps) {
+function GateChain({ gateVerdicts }: { gateVerdicts: Artifact[] }) {
+  if (!gateVerdicts || gateVerdicts.length === 0) return null;
+
+  return (
+    <Box gap={1}>
+      <Text dimColor>Gates:</Text>
+      {gateVerdicts.map((g) => {
+        const data = g.data as Record<string, unknown>;
+        const action = (data.action as string) ?? "?";
+        const color = action === "proceed" ? "green" : action === "rework" ? "yellow" : "red";
+        const icon = action === "proceed" ? "+" : action === "rework" ? "~" : "x";
+        return (
+          <Text key={g.id} color={color}>[{icon}{g.phase}]</Text>
+        );
+      })}
+    </Box>
+  );
+}
+
+export function RunHeader({ run, isActive, mode, gateVerdicts }: RunHeaderProps) {
   const title = (run.metadata as Record<string, unknown>)?.title as string | undefined;
   const statusColor = STATUS_COLORS[run.status] ?? "white";
   const repoShort = run.repo.split("/").pop() ?? run.repo;
@@ -65,7 +86,14 @@ export function RunHeader({ run, isActive }: RunHeaderProps) {
           <Text color="blue">#{run.issueNumber}</Text>
           {title ? ` ${title}` : ""}
         </Text>
-        <Text dimColor>{repoShort}</Text>
+        <Box gap={2}>
+          {mode && (
+            <Text color={mode === "watch" ? "magenta" : "gray"} bold>
+              {mode === "watch" ? "[WATCH]" : "[ASSISTED]"}
+            </Text>
+          )}
+          <Text dimColor>{repoShort}</Text>
+        </Box>
       </Box>
 
       <Box gap={2}>
@@ -86,6 +114,8 @@ export function RunHeader({ run, isActive }: RunHeaderProps) {
         {run.branch && <Text dimColor>Branch: {run.branch}</Text>}
         {run.prUrl && <Text>PR: <Text color="cyan">{run.prUrl}</Text></Text>}
       </Box>
+
+      <GateChain gateVerdicts={gateVerdicts ?? []} />
 
       {hint && (
         <Text color="yellow">{hint}</Text>

@@ -1,6 +1,5 @@
 import React, { useReducer, useCallback, useEffect, useRef } from "react";
 import { Box, Text, useApp, useStdout } from "ink";
-import TextInput from "ink-text-input";
 import type { StateStore } from "../state/store.js";
 import type { ProcessRegistry } from "../runner/process-registry.js";
 import type { WorkflowOrchestrator } from "../workflow/orchestrator.js";
@@ -16,8 +15,12 @@ import { ArtifactPane } from "./components/artifact-pane.js";
 import { TimelinePane } from "./components/timeline-pane.js";
 import { LogPane } from "./components/log-pane.js";
 import { ContextFooter } from "./components/context-footer.js";
+import { NewRunDialog } from "./components/new-run-dialog.js";
+import { ReworkDialog } from "./components/rework-dialog.js";
+import { ApprovalQueueView } from "./components/approval-queue-view.js";
+import type { ApprovalQueueItem } from "./components/approval-queue-view.js";
+import { WhyPausedPanel } from "./components/why-paused-panel.js";
 import { uiReducer, initialUIState } from "./state.js";
-import type { UIState } from "./state.js";
 
 interface AppProps {
   store: StateStore;
@@ -51,6 +54,17 @@ export function App({ store, registry, orchestrator }: AppProps) {
   const approvals: ApprovalRequest[] = selectedRun
     ? store.getApprovalsByWorkflow(selectedRun.id)
     : [];
+
+  // Gate verdicts for header chain (M3)
+  const gateVerdicts = artifacts.filter((a) => a.type === "gate_verdict");
+
+  // Approval queue data
+  const allPendingApprovals = store.listPendingApprovals();
+  const approvalQueueItems: ApprovalQueueItem[] = allPendingApprovals.map((a) => ({
+    approval: a,
+    run: store.getWorkflowRun(a.workflowRunId),
+  }));
+  const blockedRuns = runs.filter((r) => r.status === "failed" || r.status === "escalated");
 
   // Active process tracking
   const [activeProcessId, setActiveProcessId] = React.useState<string | null>(null);
@@ -99,6 +113,17 @@ export function App({ store, registry, orchestrator }: AppProps) {
   }, [runs]);
 
   const handleNavigate = useCallback((direction: "up" | "down" | "left" | "right") => {
+    if (ui.screen === "approvals") {
+      const totalItems = approvalQueueItems.length + blockedRuns.length;
+      if (totalItems === 0) return;
+      if (direction === "up") {
+        dispatch({ type: "SET_APPROVAL_INDEX", index: Math.max(0, ui.approvalIndex - 1) });
+      } else if (direction === "down") {
+        dispatch({ type: "SET_APPROVAL_INDEX", index: Math.min(totalItems - 1, ui.approvalIndex + 1) });
+      }
+      return;
+    }
+
     if (ui.screen !== "dashboard") return;
 
     let newCol = ui.focusedColumnIndex;
@@ -124,7 +149,7 @@ export function App({ store, registry, orchestrator }: AppProps) {
     if (colRuns[newRow]) {
       dispatch({ type: "SELECT_RUN", runId: colRuns[newRow].id });
     }
-  }, [ui.screen, ui.focusedColumnIndex, ui.focusedRowIndex, getColumnRuns]);
+  }, [ui.screen, ui.focusedColumnIndex, ui.focusedRowIndex, ui.approvalIndex, getColumnRuns, approvalQueueItems.length, blockedRuns.length]);
 
   const handleSelect = useCallback(() => {
     if (ui.screen === "dashboard") {
@@ -133,32 +158,78 @@ export function App({ store, registry, orchestrator }: AppProps) {
       if (run) {
         dispatch({ type: "OPEN_RUN", runId: run.id });
       }
+    } else if (ui.screen === "approvals") {
+      // Open the run for the selected approval
+      if (ui.approvalIndex < approvalQueueItems.length) {
+        const item = approvalQueueItems[ui.approvalIndex];
+        if (item.run) {
+          dispatch({ type: "OPEN_RUN", runId: item.run.id });
+        }
+      } else {
+        const blockedIdx = ui.approvalIndex - approvalQueueItems.length;
+        const run = blockedRuns[blockedIdx];
+        if (run) {
+          dispatch({ type: "OPEN_RUN", runId: run.id });
+        }
+      }
     }
-  }, [ui.screen, ui.focusedColumnIndex, ui.focusedRowIndex, getColumnRuns]);
+  }, [ui.screen, ui.focusedColumnIndex, ui.focusedRowIndex, ui.approvalIndex, getColumnRuns, approvalQueueItems, blockedRuns]);
 
   // ─── Run actions ─────────────────────────────────────────────
 
-  const handleApprove = useCallback(() => {
-    if (!selectedRun) return;
-    if (selectedRun.status === "plan_draft" || selectedRun.status === "plan_revision") {
-      orchestrator.approvePlan(selectedRun.issueNumber).then(
-        () => showStatus(`Plan approved for #${selectedRun.issueNumber}`),
-        (err: unknown) => showStatus(`Approve failed: ${err instanceof Error ? err.message : String(err)}`),
-      );
+  const getApprovalTarget = useCallback((): { issueNumber: number; runId: string } | null => {
+    // In approvals screen, use the selected approval's run
+    if (ui.screen === "approvals" && ui.approvalIndex < approvalQueueItems.length) {
+      const item = approvalQueueItems[ui.approvalIndex];
+      if (item.run) return { issueNumber: item.run.issueNumber, runId: item.run.id };
     }
-  }, [selectedRun, orchestrator, showStatus]);
+    // Otherwise use selected run
+    if (selectedRun) return { issueNumber: selectedRun.issueNumber, runId: selectedRun.id };
+    return null;
+  }, [ui.screen, ui.approvalIndex, approvalQueueItems, selectedRun]);
+
+  const handleApprove = useCallback(() => {
+    const target = getApprovalTarget();
+    if (!target) return;
+
+    const targetRun = store.getWorkflowRun(target.runId);
+    if (!targetRun) return;
+    if (targetRun.status !== "plan_draft" && targetRun.status !== "plan_revision") {
+      showStatus("Can only approve plans in plan_draft/plan_revision status");
+      return;
+    }
+
+    orchestrator.approvePlan(target.issueNumber).then(
+      () => showStatus(`Plan approved for #${target.issueNumber}`),
+      (err: unknown) => showStatus(`Approve failed: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }, [getApprovalTarget, store, orchestrator, showStatus]);
 
   const handleRework = useCallback(() => {
-    if (!selectedRun) return;
-    if (selectedRun.status !== "plan_draft") {
+    const target = getApprovalTarget();
+    if (!target) return;
+
+    const targetRun = store.getWorkflowRun(target.runId);
+    if (!targetRun || targetRun.status !== "plan_draft") {
       showStatus("Rework only works on plan_draft status");
       return;
     }
-    orchestrator.reworkPlan(selectedRun.issueNumber).then(
+
+    // Open rework dialog for feedback
+    dispatch({ type: "SELECT_RUN", runId: target.runId });
+    dispatch({ type: "OPEN_DIALOG", dialog: "rework" });
+  }, [getApprovalTarget, store, showStatus]);
+
+  const handleReworkSubmit = useCallback(() => {
+    if (!selectedRun) return;
+    const note = ui.reworkNote.trim() || undefined;
+    dispatch({ type: "CLOSE_DIALOG" });
+
+    orchestrator.reworkPlan(selectedRun.issueNumber, note).then(
       () => showStatus(`Plan sent for rework #${selectedRun.issueNumber}`),
       (err: unknown) => showStatus(`Rework failed: ${err instanceof Error ? err.message : String(err)}`),
     );
-  }, [selectedRun, orchestrator, showStatus]);
+  }, [selectedRun, ui.reworkNote, orchestrator, showStatus]);
 
   const handleContinue = useCallback(() => {
     if (!selectedRun) return;
@@ -212,9 +283,8 @@ export function App({ store, registry, orchestrator }: AppProps) {
     const issue = selectedRun.issueNumber;
     const phase = selectedRun.currentPhase;
 
-    const phaseRetry: Record<string, { resetTo: string; label: string; fn: () => Promise<unknown> }> = {
+    const phaseRetry: Record<string, { label: string; fn: () => Promise<unknown> }> = {
       triage: {
-        resetTo: "new",
         label: "Retrying triage",
         fn: () => {
           store.deleteWorkflowRun(selectedRun.id);
@@ -222,7 +292,6 @@ export function App({ store, registry, orchestrator }: AppProps) {
         },
       },
       plan: {
-        resetTo: "triaged",
         label: "Retrying plan",
         fn: () => {
           store.updateStatus(selectedRun.id, "triaged", "Reset for retry");
@@ -230,7 +299,6 @@ export function App({ store, registry, orchestrator }: AppProps) {
         },
       },
       implement: {
-        resetTo: "plan_accepted",
         label: "Retrying implement",
         fn: () => {
           store.updateStatus(selectedRun.id, "plan_accepted", "Reset for retry");
@@ -238,7 +306,6 @@ export function App({ store, registry, orchestrator }: AppProps) {
         },
       },
       verify: {
-        resetTo: "implementing",
         label: "Retrying verify",
         fn: () => {
           store.updateStatus(selectedRun.id, "implementing", "Reset for retry");
@@ -246,7 +313,6 @@ export function App({ store, registry, orchestrator }: AppProps) {
         },
       },
       review: {
-        resetTo: "draft_pr_opened",
         label: "Retrying review",
         fn: () => {
           store.updateStatus(selectedRun.id, "draft_pr_opened", "Reset for retry");
@@ -254,7 +320,6 @@ export function App({ store, registry, orchestrator }: AppProps) {
         },
       },
       repair: {
-        resetTo: "auto_review_fix_loop",
         label: "Retrying repair",
         fn: () => {
           store.updateStatus(selectedRun.id, "auto_review_fix_loop", "Reset for retry");
@@ -300,29 +365,29 @@ export function App({ store, registry, orchestrator }: AppProps) {
   }, [selectedRun, store, ui.screen, showStatus]);
 
   const handleNewRun = useCallback(() => {
-    dispatch({ type: "SET_NEW_RUN_MODE", active: true });
+    dispatch({ type: "OPEN_DIALOG", dialog: "new-run" });
   }, []);
 
-  const handleNewRunSubmit = useCallback((text: string) => {
-    const issueNumber = parseInt(text.trim(), 10);
-    if (!issueNumber || isNaN(issueNumber)) {
-      showStatus("Invalid issue number");
-      dispatch({ type: "SET_NEW_RUN_MODE", active: false });
+  const handleNewRunSubmit = useCallback(() => {
+    const sourceId = parseInt(ui.newRunForm.sourceId.trim(), 10);
+    if (!sourceId || isNaN(sourceId)) {
+      showStatus("Invalid number");
       return;
     }
-    dispatch({ type: "SET_NEW_RUN_MODE", active: false });
-    showStatus(`Triaging #${issueNumber}...`);
-    orchestrator.triage(issueNumber).then(
+    dispatch({ type: "CLOSE_DIALOG" });
+    // TODO: support PR source type and watch mode in orchestrator
+    showStatus(`Triaging #${sourceId}...`);
+    orchestrator.triage(sourceId).then(
       (run) => {
         dispatch({ type: "OPEN_RUN", runId: run.id });
-        showStatus(`#${issueNumber}: ${run.status} -- press C to continue`);
+        showStatus(`#${sourceId}: ${run.status} -- press C to continue`);
       },
       (err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         showStatus(`Failed: ${msg}`);
       },
     );
-  }, [orchestrator, showStatus]);
+  }, [ui.newRunForm, orchestrator, showStatus]);
 
   const handleSendInput = useCallback((text: string) => {
     if (!activeProcessId) return;
@@ -344,26 +409,28 @@ export function App({ store, registry, orchestrator }: AppProps) {
 
   // ─── Keybindings ─────────────────────────────────────────────
 
+  const isDialogOpen = ui.dialog !== null;
+
   useKeybindings({
     onNavigate: handleNavigate,
-    onSelect: handleSelect,
+    onSelect: isDialogOpen ? () => {} : handleSelect,
     onNextPane: () => dispatch({ type: "NEXT_PANE" }),
     onPrevPane: () => dispatch({ type: "PREV_PANE" }),
     onSetLogMode: (mode) => dispatch({ type: "SET_LOG_MODE", mode }),
-    onApprove: handleApprove,
-    onContinue: handleContinue,
-    onRetry: handleRetry,
-    onKill: handleKill,
-    onDelete: handleDelete,
-    onNewRun: handleNewRun,
+    onApprove: isDialogOpen ? () => {} : handleApprove,
+    onContinue: isDialogOpen ? () => {} : handleContinue,
+    onRetry: isDialogOpen ? () => {} : handleRetry,
+    onKill: isDialogOpen ? () => {} : handleKill,
+    onDelete: isDialogOpen ? () => {} : handleDelete,
+    onNewRun: isDialogOpen ? () => {} : handleNewRun,
     onQuit: () => exit(),
     onEnterInput: () => dispatch({ type: "SET_INPUT_MODE", active: true }),
     onExitInput: () => dispatch({ type: "SET_INPUT_MODE", active: false }),
     onBack: () => dispatch({ type: "BACK" }),
-    onRework: handleRework,
+    onRework: isDialogOpen ? () => {} : handleRework,
     onOpenExternal: handleOpenExternal,
     onApprovalsView: handleApprovalsView,
-  }, ui.screen, ui.inputMode || ui.newRunMode);
+  }, ui.screen, ui.inputMode || isDialogOpen);
 
   // ─── Render ──────────────────────────────────────────────────
 
@@ -375,8 +442,19 @@ export function App({ store, registry, orchestrator }: AppProps) {
       {ui.screen === "run" && selectedRun ? (
         <>
           <Box borderStyle="single" borderColor="blue" flexShrink={0}>
-            <RunHeader run={selectedRun} isActive={!!activeProcessId} />
+            <RunHeader
+              run={selectedRun}
+              isActive={!!activeProcessId}
+              gateVerdicts={gateVerdicts}
+            />
           </Box>
+
+          {/* Why paused panel — only for blocked states */}
+          <WhyPausedPanel
+            run={selectedRun}
+            artifacts={artifacts}
+            transitions={transitions}
+          />
 
           <Box flexGrow={1} flexDirection="row" overflow="hidden">
             {/* Left: Artifact pane */}
@@ -413,26 +491,13 @@ export function App({ store, registry, orchestrator }: AppProps) {
           </Box>
         </>
       ) : ui.screen === "approvals" ? (
-        /* ── Approvals screen (placeholder, will be expanded in M2) ── */
-        <Box flexDirection="column" flexGrow={1} padding={1}>
-          <Text bold>Pending Approvals</Text>
-          <Text dimColor>Press Esc to go back</Text>
-          {runs
-            .filter((r) => r.status === "plan_draft" || r.status === "awaiting_human_review")
-            .map((r) => (
-              <Text key={r.id}>
-                <Text color="yellow">#{r.issueNumber}</Text>
-                {" "}
-                <Text>{r.status}</Text>
-                {" "}
-                <Text dimColor>{(r.metadata as Record<string, unknown>)?.title as string ?? ""}</Text>
-              </Text>
-            ))
-          }
-          {runs.filter((r) => r.status === "plan_draft" || r.status === "awaiting_human_review").length === 0 && (
-            <Text dimColor>No pending approvals</Text>
-          )}
-        </Box>
+        /* ── Approvals screen ─────────────────────────────── */
+        <ApprovalQueueView
+          items={approvalQueueItems}
+          blockedRuns={blockedRuns}
+          selectedIndex={ui.approvalIndex}
+          height={termHeight - 4}
+        />
       ) : (
         /* ── Dashboard screen ─────────────────────────────── */
         <>
@@ -482,22 +547,35 @@ export function App({ store, registry, orchestrator }: AppProps) {
         </>
       )}
 
-      {/* ── New run input ─────────────────────────────────── */}
-      {ui.newRunMode && (
-        <Box paddingLeft={1} flexShrink={0}>
-          <Text color="green">Issue #: </Text>
-          <TextInput
-            value={ui.newRunInput}
-            onChange={(v) => dispatch({ type: "SET_NEW_RUN_INPUT", value: v })}
+      {/* ── Dialogs ───────────────────────────────────────── */}
+      {ui.dialog === "new-run" && (
+        <Box position="absolute" marginTop={5} marginLeft={Math.floor((termWidth - 52) / 2)}>
+          <NewRunDialog
+            form={ui.newRunForm}
+            onChangeSourceType={(t) => dispatch({ type: "SET_NEW_RUN_SOURCE_TYPE", sourceType: t })}
+            onChangeSourceId={(v) => dispatch({ type: "SET_NEW_RUN_SOURCE_ID", value: v })}
+            onChangeMode={(m) => dispatch({ type: "SET_NEW_RUN_MODE", mode: m })}
             onSubmit={handleNewRunSubmit}
+            onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
           />
-          <Text dimColor>  Enter to start, Esc to cancel</Text>
+        </Box>
+      )}
+
+      {ui.dialog === "rework" && selectedRun && (
+        <Box position="absolute" marginTop={5} marginLeft={Math.floor((termWidth - 62) / 2)}>
+          <ReworkDialog
+            issueNumber={selectedRun.issueNumber}
+            note={ui.reworkNote}
+            onChangeNote={(v) => dispatch({ type: "SET_REWORK_NOTE", value: v })}
+            onSubmit={handleReworkSubmit}
+            onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
+          />
         </Box>
       )}
 
       {/* ── Input bar ─────────────────────────────────────── */}
       <InputBar
-        isActive={ui.inputMode && !ui.newRunMode}
+        isActive={ui.inputMode && !isDialogOpen}
         onSubmit={handleSendInput}
       />
 
@@ -511,6 +589,7 @@ export function App({ store, registry, orchestrator }: AppProps) {
       {/* ── Contextual footer ─────────────────────────────── */}
       <ContextFooter
         screen={ui.screen}
+        dialog={ui.dialog}
         inputMode={ui.inputMode}
         runStatus={selectedRun?.status}
         hasActiveProcess={!!activeProcessId}

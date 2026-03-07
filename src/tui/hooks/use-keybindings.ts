@@ -28,6 +28,7 @@ export function useKeybindings(
   inputMode: boolean,
 ): void {
   useInput((input, key) => {
+    // In input/dialog mode, only Esc works
     if (inputMode) {
       if (key.escape) actions.onExitInput();
       return;

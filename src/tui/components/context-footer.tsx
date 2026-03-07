@@ -1,9 +1,10 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { Screen } from "../state.js";
+import type { Screen, Dialog } from "../state.js";
 
 interface ContextFooterProps {
   screen: Screen;
+  dialog: Dialog;
   inputMode: boolean;
   runStatus?: string | null;
   hasActiveProcess: boolean;
@@ -20,8 +21,19 @@ function dashboardHints(): HintEntry[] {
     { key: "h/l", label: "col" },
     { key: "Enter", label: "open" },
     { key: "N", label: "new" },
+    { key: "V", label: "approvals" },
     { key: "C", label: "continue" },
+    { key: "Q", label: "quit" },
+  ];
+}
+
+function approvalHints(): HintEntry[] {
+  return [
+    { key: "j/k", label: "nav" },
+    { key: "Enter", label: "open run" },
     { key: "A", label: "approve" },
+    { key: "W", label: "rework" },
+    { key: "Esc", label: "back" },
     { key: "Q", label: "quit" },
   ];
 }
@@ -54,22 +66,24 @@ function runHints(status: string | null, hasActiveProcess: boolean): HintEntry[]
     hints.push({ key: "K", label: "kill" });
   }
 
+  hints.push({ key: "O", label: "open PR" });
   hints.push({ key: "Q", label: "quit" });
   return hints;
 }
 
-export function ContextFooter({ screen, inputMode, runStatus, hasActiveProcess }: ContextFooterProps) {
-  if (inputMode) {
-    return (
-      <Box paddingLeft={1} flexShrink={0}>
-        <Text dimColor>Type message, Enter send, Esc cancel</Text>
-      </Box>
-    );
+export function ContextFooter({ screen, dialog, inputMode, runStatus, hasActiveProcess }: ContextFooterProps) {
+  if (inputMode || dialog) {
+    return null;
   }
 
-  const hints = screen === "run"
-    ? runHints(runStatus ?? null, hasActiveProcess)
-    : dashboardHints();
+  let hints: HintEntry[];
+  if (screen === "approvals") {
+    hints = approvalHints();
+  } else if (screen === "run") {
+    hints = runHints(runStatus ?? null, hasActiveProcess);
+  } else {
+    hints = dashboardHints();
+  }
 
   return (
     <Box paddingLeft={1} flexShrink={0}>

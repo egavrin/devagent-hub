@@ -272,10 +272,17 @@ export class GhCliGateway implements GitHubGateway {
     repo: string,
     prNumber: number,
   ): Promise<GitHubCheck[]> {
-    const raw = gh(
-      ["pr", "checks", String(prNumber), "--json", "name,state,bucket"],
-      repo,
-    );
+    let raw: string;
+    try {
+      raw = gh(
+        ["pr", "checks", String(prNumber), "--json", "name,state,bucket"],
+        repo,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("no checks reported")) return [];
+      throw err;
+    }
     interface GhCheckV2 { name: string; state: string; bucket: string }
     return parseJSON<GhCheckV2[]>(raw).map((c) => ({
       name: c.name,

@@ -4,16 +4,29 @@ export type FocusPane = "queue" | "artifact" | "timeline" | "logs";
 
 export type LogMode = "structured" | "raw";
 
+export type Dialog = null | "new-run" | "rework";
+
+export type NewRunSourceType = "issue" | "pr";
+export type NewRunMode = "assisted" | "watch";
+
+export interface NewRunForm {
+  sourceType: NewRunSourceType;
+  sourceId: string;
+  mode: NewRunMode;
+}
+
 export interface UIState {
   screen: Screen;
   focusedPane: FocusPane;
   selectedRunId: string | null;
   logMode: LogMode;
   inputMode: boolean;
-  newRunMode: boolean;
-  newRunInput: string;
+  dialog: Dialog;
+  newRunForm: NewRunForm;
+  reworkNote: string;
   focusedColumnIndex: number;
   focusedRowIndex: number;
+  approvalIndex: number;
   statusMessage: string | null;
 }
 
@@ -25,10 +38,15 @@ export type UIAction =
   | { type: "SELECT_RUN"; runId: string | null }
   | { type: "SET_LOG_MODE"; mode: LogMode }
   | { type: "SET_INPUT_MODE"; active: boolean }
-  | { type: "SET_NEW_RUN_MODE"; active: boolean }
-  | { type: "SET_NEW_RUN_INPUT"; value: string }
+  | { type: "OPEN_DIALOG"; dialog: Dialog }
+  | { type: "CLOSE_DIALOG" }
+  | { type: "SET_NEW_RUN_SOURCE_TYPE"; sourceType: NewRunSourceType }
+  | { type: "SET_NEW_RUN_SOURCE_ID"; value: string }
+  | { type: "SET_NEW_RUN_MODE"; mode: NewRunMode }
+  | { type: "SET_REWORK_NOTE"; value: string }
   | { type: "SET_FOCUSED_COLUMN"; index: number }
   | { type: "SET_FOCUSED_ROW"; index: number }
+  | { type: "SET_APPROVAL_INDEX"; index: number }
   | { type: "SET_STATUS"; message: string | null }
   | { type: "OPEN_RUN"; runId: string }
   | { type: "BACK" };
@@ -41,17 +59,19 @@ export const initialUIState: UIState = {
   selectedRunId: null,
   logMode: "structured",
   inputMode: false,
-  newRunMode: false,
-  newRunInput: "",
+  dialog: null,
+  newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted" },
+  reworkNote: "",
   focusedColumnIndex: 0,
   focusedRowIndex: 0,
+  approvalIndex: 0,
   statusMessage: null,
 };
 
 export function uiReducer(state: UIState, action: UIAction): UIState {
   switch (action.type) {
     case "SET_SCREEN":
-      return { ...state, screen: action.screen };
+      return { ...state, screen: action.screen, approvalIndex: 0 };
 
     case "SET_FOCUSED_PANE":
       return { ...state, focusedPane: action.pane };
@@ -77,19 +97,39 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
     case "SET_INPUT_MODE":
       return { ...state, inputMode: action.active };
 
-    case "SET_NEW_RUN_MODE":
-      return action.active
-        ? { ...state, newRunMode: true, newRunInput: "" }
-        : { ...state, newRunMode: false, newRunInput: "" };
+    case "OPEN_DIALOG":
+      return {
+        ...state,
+        dialog: action.dialog,
+        ...(action.dialog === "new-run"
+          ? { newRunForm: { sourceType: "issue", sourceId: "", mode: "assisted" } }
+          : {}),
+        ...(action.dialog === "rework" ? { reworkNote: "" } : {}),
+      };
 
-    case "SET_NEW_RUN_INPUT":
-      return { ...state, newRunInput: action.value };
+    case "CLOSE_DIALOG":
+      return { ...state, dialog: null };
+
+    case "SET_NEW_RUN_SOURCE_TYPE":
+      return { ...state, newRunForm: { ...state.newRunForm, sourceType: action.sourceType } };
+
+    case "SET_NEW_RUN_SOURCE_ID":
+      return { ...state, newRunForm: { ...state.newRunForm, sourceId: action.value } };
+
+    case "SET_NEW_RUN_MODE":
+      return { ...state, newRunForm: { ...state.newRunForm, mode: action.mode } };
+
+    case "SET_REWORK_NOTE":
+      return { ...state, reworkNote: action.value };
 
     case "SET_FOCUSED_COLUMN":
       return { ...state, focusedColumnIndex: action.index };
 
     case "SET_FOCUSED_ROW":
       return { ...state, focusedRowIndex: action.index };
+
+    case "SET_APPROVAL_INDEX":
+      return { ...state, approvalIndex: action.index };
 
     case "SET_STATUS":
       return { ...state, statusMessage: action.message };
@@ -100,11 +140,12 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
         screen: "run",
         selectedRunId: action.runId,
         focusedPane: "artifact",
+        dialog: null,
       };
 
     case "BACK":
-      if (state.newRunMode) {
-        return { ...state, newRunMode: false, newRunInput: "" };
+      if (state.dialog) {
+        return { ...state, dialog: null };
       }
       if (state.screen === "run") {
         return { ...state, screen: "dashboard", focusedPane: "queue" };
