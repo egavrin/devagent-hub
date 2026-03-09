@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { RunnerAdapter, LaunchParams, RunnerCapabilities } from "./runner-adapter.js";
+import type { RunnerAdapter, LaunchParams, RunnerCapabilities, RunnerHealth } from "./runner-adapter.js";
 import type { LaunchResult } from "./launcher.js";
 import { buildSkillContext } from "./skill-prompt.js";
 
@@ -176,11 +176,15 @@ export class ClaudeRunner implements RunnerAdapter {
     let rawOutput = "";
 
     try {
+      // Strip CLAUDECODE env var to allow nesting (claude detects parent sessions)
+      const env = { ...process.env };
+      delete env.CLAUDECODE;
       rawOutput = execFileSync(binParts[0], args, {
         encoding: "utf-8",
         timeout: this.config.timeout ?? 15 * 60 * 1000,
         cwd: repoPath,
         maxBuffer: 10 * 1024 * 1024,
+        env,
       });
     } catch (err: unknown) {
       exitCode = (err as { status?: number })?.status ?? 1;
@@ -225,6 +229,14 @@ export class ClaudeRunner implements RunnerAdapter {
     } catch {
       return null;
     }
+  }
+
+  health(): RunnerHealth | null {
+    return null;
+  }
+
+  cancel(_runId: string): boolean {
+    return false;
   }
 
   /**

@@ -14,6 +14,7 @@ import {
   artifactsCommand,
   autopilotCommand,
   doctorCommand,
+  bootstrapCommand,
 } from "./commands.js";
 
 const [command, ...args] = process.argv.slice(2);
@@ -34,6 +35,7 @@ Commands:
   status <run-id>       Show workflow run details [--json]
   artifacts <run-id>    Show artifacts for a workflow run
   list                  List workflow runs [--json]
+  bootstrap <brief>     Bootstrap a project from a brief file
   doctor                Check runner compatibility and report issues
   help                  Show this help
 
@@ -76,6 +78,9 @@ switch (command) {
     break;
   case "list":
     listCommand(args);
+    break;
+  case "bootstrap":
+    await bootstrapCommand(args);
     break;
   case "doctor":
     doctorCommand(args);

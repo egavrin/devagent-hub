@@ -9,9 +9,10 @@ interface ColumnProps {
   selectedRunId: string | null;
   activeRunId: string | null;
   isFocused: boolean;
+  titleColor?: string;
 }
 
-export function Column({ title, runs, selectedRunId, activeRunId, isFocused }: ColumnProps) {
+export function Column({ title, runs, selectedRunId, activeRunId, isFocused, titleColor }: ColumnProps) {
   return (
     <Box
       flexDirection="column"
@@ -21,7 +22,7 @@ export function Column({ title, runs, selectedRunId, activeRunId, isFocused }: C
       flexBasis={0}
       paddingRight={1}
     >
-      <Text bold color={isFocused ? "blue" : "white"}> {title} ({runs.length})</Text>
+      <Text bold color={isFocused ? "blue" : (titleColor ?? "white")}> {title} ({runs.length})</Text>
       {runs.map((run) => (
         <RunCard
           key={run.id}
@@ -30,7 +31,6 @@ export function Column({ title, runs, selectedRunId, activeRunId, isFocused }: C
           isActive={run.id === activeRunId}
         />
       ))}
-      {runs.length === 0 && <Text dimColor>  (empty)</Text>}
     </Box>
   );
 }

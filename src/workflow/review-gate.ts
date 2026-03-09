@@ -39,7 +39,7 @@ export class LLMReviewGate implements ReviewGate {
     context: GateContext,
   ): Promise<GateVerdict> {
     const result = await this.launcher.launch({
-      phase: "review",
+      phase: "gate",
       repoPath: context.repoPath,
       runId: `gate-${phase}-${context.workflowRunId}`,
       input: {

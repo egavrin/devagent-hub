@@ -1,6 +1,8 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { Screen, Dialog } from "../state.js";
+import type { WorkflowStatus } from "../../state/types.js";
+import { suggestedAction } from "../status-map.js";
 
 interface ContextFooterProps {
   screen: Screen;
@@ -16,19 +18,26 @@ interface HintEntry {
   label: string;
 }
 
-function dashboardHints(autopilotRunning?: boolean): HintEntry[] {
-  return [
-    { key: "j/k", label: "nav" },
-    { key: "h/l", label: "col" },
+function dashboardHints(runStatus?: string | null): HintEntry[] {
+  const hints: HintEntry[] = [
     { key: "Enter", label: "open" },
-    { key: "N", label: "new" },
-    { key: "V", label: "approvals" },
     { key: "C", label: "continue" },
-    { key: "M", label: "runners" },
-    { key: "U", label: "autopilot" },
-    { key: "X", label: autopilotRunning ? "stop autopilot" : "autopilot" },
-    { key: "Q", label: "quit" },
+    { key: "N", label: "new" },
+    { key: "V", label: "inbox" },
+    { key: "/", label: "search" },
+    { key: ".", label: "commands" },
+    { key: "?", label: "help" },
   ];
+
+  // Prepend suggested action for selected run
+  if (runStatus) {
+    const action = suggestedAction(runStatus as WorkflowStatus);
+    if (action && !hints.some(h => h.key === action.key)) {
+      hints.unshift({ key: action.key, label: action.label });
+    }
+  }
+
+  return hints;
 }
 
 function runnersHints(): HintEntry[] {
@@ -57,80 +66,53 @@ function settingsHints(): HintEntry[] {
 function approvalHints(runStatus?: string | null): HintEntry[] {
   const hints: HintEntry[] = [
     { key: "j/k", label: "nav" },
-    { key: "Enter", label: "open run" },
+    { key: "Enter", label: "open" },
   ];
 
   if (runStatus === "plan_draft" || runStatus === "plan_revision") {
-    hints.push({ key: "A", label: "approve plan" });
+    hints.push({ key: "A", label: "approve" });
     hints.push({ key: "W", label: "rework" });
   } else if (runStatus === "awaiting_human_review") {
-    hints.push({ key: "A", label: "approve review" });
-    hints.push({ key: "C", label: "mark reviewed" });
-    hints.push({ key: "r", label: "rerun reviewer" });
-    hints.push({ key: "O", label: "open PR" });
+    hints.push({ key: "A", label: "approve" });
+    hints.push({ key: "r", label: "rerun" });
   } else if (runStatus === "ready_to_merge") {
-    hints.push({ key: "A", label: "mark done" });
-    hints.push({ key: "O", label: "open PR" });
+    hints.push({ key: "A", label: "done" });
   } else if (runStatus === "failed") {
     hints.push({ key: "r", label: "retry" });
   } else if (runStatus === "escalated") {
     hints.push({ key: "T", label: "take-over" });
   } else {
     hints.push({ key: "A", label: "approve" });
-    hints.push({ key: "W", label: "rework" });
   }
 
   hints.push({ key: "Esc", label: "back" });
-  hints.push({ key: "Q", label: "quit" });
   return hints;
 }
 
 function runHints(status: string | null, hasActiveProcess: boolean): HintEntry[] {
   const hints: HintEntry[] = [
     { key: "Tab", label: "pane" },
-    { key: "S/L/E", label: "log mode" },
     { key: "Esc", label: "back" },
   ];
 
-  if (status === "plan_draft" || status === "plan_revision") {
-    hints.push({ key: "A", label: "approve" });
-    hints.push({ key: "W", label: "rework" });
-  }
-
-  if (status === "failed") {
-    hints.push({ key: "R", label: "retry" });
-  }
-
-  const continuable = [
-    "new", "triaged", "plan_draft", "plan_revision", "plan_accepted",
-    "awaiting_local_verify", "draft_pr_opened", "auto_review_fix_loop",
-    "awaiting_human_review", "ready_to_merge",
-  ];
-  if (status && continuable.includes(status)) {
-    hints.push({ key: "C", label: "continue" });
+  // Suggested action first
+  if (status) {
+    const action = suggestedAction(status as WorkflowStatus);
+    if (action) {
+      hints.unshift({ key: action.key, label: action.label });
+    }
   }
 
   if (hasActiveProcess) {
     hints.push({ key: "K", label: "kill" });
   }
 
-  const terminal = ["done", "failed", "escalated"];
-  if (status && !terminal.includes(status)) {
-    hints.push({ key: "R", label: "rerun" });
-    hints.push({ key: "E", label: "escalate" });
-    hints.push({ key: "P", label: "pause" });
-    hints.push({ key: "T", label: "take-over" });
-  }
-  hints.push({ key: "F", label: "diff" });
-  hints.push({ key: "O", label: "open PR" });
-  hints.push({ key: "ga", label: "artifact" });
-  hints.push({ key: "gg", label: "gate" });
-  hints.push({ key: "ge", label: "error" });
-  hints.push({ key: "Q", label: "quit" });
+  hints.push({ key: ".", label: "commands" });
+  hints.push({ key: "?", label: "help" });
   return hints;
 }
 
-export function ContextFooter({ screen, dialog, inputMode, runStatus, hasActiveProcess, autopilotRunning }: ContextFooterProps) {
+export function ContextFooter({ screen, dialog, inputMode, runStatus, hasActiveProcess }: ContextFooterProps) {
   if (inputMode || dialog) {
     return null;
   }
@@ -147,7 +129,7 @@ export function ContextFooter({ screen, dialog, inputMode, runStatus, hasActiveP
   } else if (screen === "settings") {
     hints = settingsHints();
   } else {
-    hints = dashboardHints(autopilotRunning);
+    hints = dashboardHints(runStatus);
   }
 
   return (

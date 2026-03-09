@@ -647,6 +647,82 @@ export function listCommand(args: string[] = []): void {
   }
 }
 
+export async function bootstrapCommand(args: string[]): Promise<void> {
+  const briefPath = args[0];
+  if (!briefPath) {
+    console.error("Usage: devagent-hub bootstrap <brief-path> [--repo owner/repo] [--mode assisted|watch]");
+    process.exit(1);
+  }
+
+  const repo = detectRepo(args);
+  const repoRoot = detectRepoRoot();
+  const store = createStore();
+
+  try {
+    const config = loadWorkflowConfig(repoRoot);
+
+    const modeIdx = args.indexOf("--mode");
+    if (modeIdx !== -1 && args[modeIdx + 1]) {
+      const mode = args[modeIdx + 1];
+      if (mode === "assisted" || mode === "watch" || mode === "autopilot") {
+        config.mode = mode;
+      } else {
+        console.error(`Invalid mode "${mode}". Valid: assisted, watch, autopilot`);
+        process.exit(1);
+      }
+    }
+
+    const launcher = createLauncher(config);
+    const worktreeManager = new WorktreeManager(repoRoot);
+    const orchestrator = new WorkflowOrchestrator({
+      store,
+      github: new GhCliGateway(),
+      launcher,
+      repo,
+      repoRoot,
+      config,
+      worktreeManager,
+      reviewGate: (config.mode === "watch" || config.mode === "autopilot") ? new LLMReviewGate(launcher) : undefined,
+    });
+
+    console.log(`Bootstrapping project from brief: ${briefPath}`);
+    console.log(`  Repo: ${repo}`);
+    console.log(`  Mode: ${config.mode}`);
+    console.log();
+
+    const run = await orchestrator.bootstrapFromBrief(briefPath);
+
+    console.log(`Bootstrap complete.`);
+    console.log(`  Status: ${run.status}`);
+    console.log(`  Run ID: ${run.id}`);
+    console.log(`  Source: ${run.sourceRef}`);
+
+    // Show created issues from artifact
+    const artifacts = store.getArtifactsByWorkflow(run.id);
+    const bootstrapArt = artifacts.find(a => a.type === "bootstrap_report");
+    if (bootstrapArt?.data) {
+      const data = bootstrapArt.data as { issueNumbers?: number[]; items?: { title: string }[] };
+      if (data.issueNumbers && data.issueNumbers.length > 0) {
+        console.log(`  Issues created: ${data.issueNumbers.length}`);
+        for (const num of data.issueNumbers) {
+          console.log(`    - #${num}`);
+        }
+      }
+      if (data.items) {
+        console.log(`  Backlog items: ${data.items.length}`);
+      }
+    }
+
+    if (run.status === "triaged") {
+      console.log(`\nNext: approve the bootstrap plan, then run each seeded issue.`);
+      console.log(`  devagent-hub approve ${run.id.slice(0, 8)}`);
+      console.log(`  devagent-hub run <issue-number> --mode watch`);
+    }
+  } finally {
+    store.close();
+  }
+}
+
 export function doctorCommand(_args: string[] = []): void {
   const repoRoot = detectRepoRoot();
   const config = loadWorkflowConfig(repoRoot);

@@ -5,6 +5,7 @@ import { buildLaunchArgs } from "./args-builder.js";
 import type { LaunchOptions } from "./args-builder.js";
 import type { RunnerDescription } from "../workflow/stage-schemas.js";
 import type { RunnerProtocol, RunnerCompatResult } from "./protocol.js";
+import type { AgentProfile } from "../workflow/config.js";
 import { RUNNER_CONTRACT_VERSION } from "./protocol.js";
 
 export interface LaunchResult {
@@ -12,6 +13,7 @@ export interface LaunchResult {
   outputPath: string;
   eventsPath: string;
   output: unknown | null;
+  costUsd?: number;
 }
 
 export interface LauncherConfig {
@@ -139,6 +141,29 @@ export function validateRunnerCompat(desc: RunnerDescription | null): RunnerComp
     errors,
     capabilities: protocol,
   };
+}
+
+/**
+ * Validate that a profile's requested settings are supported by the runner.
+ * Returns an array of warning strings (empty if fully compatible).
+ */
+export function validateProfileAgainstRunner(
+  profile: AgentProfile,
+  desc: RunnerDescription | null,
+): string[] {
+  const warnings: string[] = [];
+  if (!desc) return ["Cannot validate: runner does not support describe"];
+
+  if (profile.provider && !desc.availableProviders.includes(profile.provider)) {
+    warnings.push(`Profile requests provider "${profile.provider}" but runner only supports: ${desc.availableProviders.join(", ")}`);
+  }
+  if (profile.approval_mode && !desc.supportedApprovalModes.includes(profile.approval_mode)) {
+    warnings.push(`Profile requests approval mode "${profile.approval_mode}" but runner supports: ${desc.supportedApprovalModes.join(", ")}`);
+  }
+  if (profile.reasoning && desc.supportedReasoningLevels.length > 0 && !desc.supportedReasoningLevels.includes(profile.reasoning)) {
+    warnings.push(`Profile requests reasoning "${profile.reasoning}" but runner supports: ${desc.supportedReasoningLevels.join(", ")}`);
+  }
+  return warnings;
 }
 
 export class RunLauncher {

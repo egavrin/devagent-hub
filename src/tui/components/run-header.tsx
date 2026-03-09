@@ -7,6 +7,13 @@ interface RunHeaderProps {
   isActive: boolean;
   gateVerdicts?: Artifact[];
   latestAgentRun?: AgentRun | null;
+  agentRunCount?: number;
+  totalCostUsd?: number;
+  budgetConfig?: {
+    run_wall_time_minutes: number;
+    run_max_iterations: number;
+    run_max_cost_usd: number;
+  };
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -73,7 +80,7 @@ function GateChain({ gateVerdicts }: { gateVerdicts: Artifact[] }) {
   );
 }
 
-export function RunHeader({ run, isActive, gateVerdicts, latestAgentRun }: RunHeaderProps) {
+export function RunHeader({ run, isActive, gateVerdicts, latestAgentRun, agentRunCount, totalCostUsd, budgetConfig }: RunHeaderProps) {
   const title = (run.metadata as Record<string, unknown>)?.title as string | undefined;
   const statusColor = STATUS_COLORS[run.status] ?? "white";
   const repoShort = run.repo.split("/").pop() ?? run.repo;
@@ -125,6 +132,24 @@ export function RunHeader({ run, isActive, gateVerdicts, latestAgentRun }: RunHe
       </Box>
 
       <GateChain gateVerdicts={gateVerdicts ?? []} />
+
+      {/* Budget metrics */}
+      {budgetConfig && (
+        <Box gap={2}>
+          <Text dimColor>Budget:</Text>
+          <Text dimColor>
+            {formatAge(run.createdAt)}/{budgetConfig.run_wall_time_minutes > 0 ? `${budgetConfig.run_wall_time_minutes}m` : "--"} wall
+          </Text>
+          <Text dimColor>
+            {agentRunCount ?? 0}/{budgetConfig.run_max_iterations > 0 ? budgetConfig.run_max_iterations : "--"} iters
+          </Text>
+          {(totalCostUsd !== undefined && totalCostUsd > 0) && (
+            <Text dimColor>
+              ${totalCostUsd.toFixed(2)}/{budgetConfig.run_max_cost_usd > 0 ? `$${budgetConfig.run_max_cost_usd.toFixed(2)}` : "--"} cost
+            </Text>
+          )}
+        </Box>
+      )}
 
       {/* Sticky blocked reason — prominent red bar */}
       {run.blockedReason && (

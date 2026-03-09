@@ -1,6 +1,6 @@
 import type { WorkflowConfig, AgentProfile, SelectionPolicy } from "../workflow/config.js";
 import type { LauncherConfig } from "./launcher.js";
-import type { RunnerAdapter, RunnerCapabilities } from "./runner-adapter.js";
+import type { RunnerAdapter, RunnerCapabilities, RunnerHealth } from "./runner-adapter.js";
 import { RunLauncher, describeRunner } from "./launcher.js";
 import { StreamingLauncher } from "./streaming-launcher.js";
 import { StreamingLauncherAdapter } from "./streaming-adapter.js";
@@ -43,7 +43,7 @@ export class LauncherFactory {
    * Policy rules are evaluated top-to-bottom; first match wins.
    * Falls back to roles config, then "default".
    */
-  resolveProfile(phase: string, context?: { complexity?: string }): string {
+  resolveProfile(phase: string, context?: { complexity?: string; risk?: string; changedFiles?: number }): string {
     const policy = this.config.selection_policy;
     if (policy) {
       for (const rule of policy.rules) {
@@ -52,6 +52,21 @@ export class LauncherFactory {
 
         if (rule.complexity) {
           if (!context?.complexity || !rule.complexity.includes(context.complexity)) continue;
+        }
+
+        if (rule.risk) {
+          if (!context?.risk || !rule.risk.includes(context.risk)) continue;
+        }
+
+        if (rule.max_changed_files != null) {
+          if (context?.changedFiles == null || context.changedFiles > rule.max_changed_files) continue;
+        }
+
+        if (rule.required_capabilities && rule.required_capabilities.length > 0) {
+          const profile = this.config.profiles[rule.profile];
+          if (!profile?.capabilities) continue;
+          const has = new Set(profile.capabilities);
+          if (!rule.required_capabilities.every((c) => has.has(c))) continue;
         }
 
         if (this.config.profiles[rule.profile]) {
@@ -64,7 +79,7 @@ export class LauncherFactory {
   }
 
   /** Get a sync launcher configured for the given phase. */
-  getLauncher(phase: string, context?: { complexity?: string }): RunnerAdapter {
+  getLauncher(phase: string, context?: { complexity?: string; risk?: string; changedFiles?: number }): RunnerAdapter {
     const profileName = this.resolveProfile(phase, context);
     if (this.syncCache.has(profileName)) return this.syncCache.get(profileName)!;
 
@@ -75,7 +90,7 @@ export class LauncherFactory {
   }
 
   /** Get a streaming launcher configured for the given phase. Requires registry for devagent. */
-  getStreamingLauncher(phase: string, context?: { complexity?: string }): RunnerAdapter {
+  getStreamingLauncher(phase: string, context?: { complexity?: string; risk?: string; changedFiles?: number }): RunnerAdapter {
     const profileName = this.resolveProfile(phase, context);
     if (this.streamingCache.has(profileName)) return this.streamingCache.get(profileName)!;
 
@@ -238,5 +253,13 @@ class DevAgentAdapter implements RunnerAdapter {
 
   describe(): RunnerCapabilities | null {
     return null; // Handled by describeRunner(bin) at factory level
+  }
+
+  health(): RunnerHealth | null {
+    return null;
+  }
+
+  cancel(_runId: string): boolean {
+    return false;
   }
 }

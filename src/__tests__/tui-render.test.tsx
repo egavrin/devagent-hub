@@ -97,6 +97,7 @@ function makeTransition(overrides: Partial<StatusTransition> = {}): StatusTransi
     to: "triaged",
     timestamp: new Date().toISOString(),
     reason: "Triage completed",
+    artifactId: null,
     ...overrides,
   };
 }

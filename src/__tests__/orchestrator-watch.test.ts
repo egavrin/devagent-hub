@@ -267,6 +267,34 @@ describe("WorkflowOrchestrator — watch mode", () => {
     expect(run.status).toBe("budget_exceeded");
   });
 
+  it("budget exceeded on cost limit", async () => {
+    // Create orchestrator with very low cost budget
+    const costConfig = {
+      ...defaultConfig(),
+      mode: "watch" as const,
+      budget: {
+        ...defaultConfig().budget,
+        run_wall_time_minutes: 9999, // not exceeded
+        run_max_cost_usd: 0.01, // very low cost limit
+      },
+    };
+    const costOrchestrator = new WorkflowOrchestrator({
+      store, github, launcher, repo: "org/repo", config: costConfig, reviewGate: gate,
+    });
+
+    github.seedIssue("org/repo", makeIssue(209));
+    // Triage succeeds but costs money
+    launcher.setResponse("triage", { exitCode: 0, output: { summary: "OK" }, costUsd: 0.05 });
+    launcher.setResponse("plan", { exitCode: 0, output: { summary: "Plan" } });
+
+    gate.setVerdict("triage", { action: "proceed", reason: "OK" });
+
+    const run = await costOrchestrator.runWorkflow(209);
+
+    // Should be budget_exceeded since cost exceeds $0.01 limit
+    expect(run.status).toBe("budget_exceeded");
+  });
+
   it("does not use gates in assisted mode", async () => {
     // Create an assisted-mode orchestrator with the same gate
     const assistedConfig = { ...defaultConfig(), mode: "assisted" as const };

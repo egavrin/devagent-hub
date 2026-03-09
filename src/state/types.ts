@@ -61,6 +61,7 @@ export interface StatusTransition {
   to: WorkflowStatus;
   timestamp: string;
   reason: string;
+  artifactId: string | null;
 }
 
 // ─── Artifacts ───────────────────────────────────────────────

@@ -19,6 +19,8 @@ import { resolveSkills } from "./skill-resolver.js";
 import { loadProjectBrief } from "./project-brief.js";
 import { seedBacklog } from "./backlog-seeder.js";
 import { execFileSync } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 export interface Finding {
   file: string;
@@ -155,6 +157,24 @@ export class WorkflowOrchestrator {
     return "human";
   }
 
+  /**
+   * Transition status and automatically set nextAction for terminal/blocked states.
+   * This wraps store.updateStatus and adds nextAction bookkeeping.
+   */
+  private transitionStatus(runId: string, to: import("../state/types.js").WorkflowStatus, reason: string, artifactId?: string): import("../state/types.js").WorkflowRun {
+    const result = this.store.updateStatus(runId, to, reason, artifactId);
+    const autoNextAction: Record<string, string> = {
+      escalated: "Human intervention required",
+      budget_exceeded: "Budget override needed",
+      failed: "Retry or escalate",
+    };
+    const nextAction = autoNextAction[to];
+    if (nextAction) {
+      this.store.updateWorkflowRun(runId, { nextAction });
+    }
+    return result;
+  }
+
   /** Request the workflow to be cancelled. */
   requestCancel(runId: string): void {
     const run = this.store.getWorkflowRun(runId);
@@ -168,7 +188,7 @@ export class WorkflowOrchestrator {
   private checkCancel(runId: string): boolean {
     const run = this.store.getWorkflowRun(runId);
     if (!run?.metadata?.cancelRequested) return false;
-    this.store.updateStatus(runId, "failed", "Cancelled by user");
+    this.transitionStatus(runId, "failed", "Cancelled by user");
     return true;
   }
 
@@ -200,12 +220,38 @@ export class WorkflowOrchestrator {
     // Check run wall time
     const elapsed = Date.now() - new Date(run.createdAt).getTime();
     const maxMs = this.config.budget.run_wall_time_minutes * 60_000;
-    if (elapsed > maxMs) return { exceeded: true, reason: "Run wall time exceeded" };
+    if (maxMs > 0 && elapsed > maxMs) {
+      return { exceeded: true, reason: "Run wall time exceeded" };
+    }
 
     // Check iteration count
     const agentRuns = this.store.getAgentRunsByWorkflow(runId);
-    if (agentRuns.length >= this.config.budget.run_max_iterations) {
+    if (this.config.budget.run_max_iterations > 0 && agentRuns.length >= this.config.budget.run_max_iterations) {
       return { exceeded: true, reason: "Max iterations exceeded" };
+    }
+
+    // Check total cost
+    const totalCost = agentRuns.reduce((sum, ar) => sum + (ar.costUsd ?? 0), 0);
+    if (this.config.budget.run_max_cost_usd > 0 && totalCost >= this.config.budget.run_max_cost_usd) {
+      return { exceeded: true, reason: `Run cost $${totalCost.toFixed(2)} exceeds limit $${this.config.budget.run_max_cost_usd}` };
+    }
+
+    // Check changed files from latest implementation artifact
+    const implArtifact = this.store.getLatestArtifact(runId, "implementation_report");
+    if (implArtifact?.data) {
+      const changedFiles = (implArtifact.data as Record<string, unknown>).changedFiles;
+      if (Array.isArray(changedFiles) && this.config.budget.run_max_changed_files > 0 && changedFiles.length > this.config.budget.run_max_changed_files) {
+        return { exceeded: true, reason: `${changedFiles.length} files changed exceeds limit ${this.config.budget.run_max_changed_files}` };
+      }
+    }
+
+    // Check unresolved escalations (same repo only)
+    if (this.config.budget.max_unresolved_escalations > 0) {
+      const allRuns = this.store.listAll();
+      const escalatedCount = allRuns.filter(r => r.status === "escalated" && r.repo === this.repo).length;
+      if (escalatedCount >= this.config.budget.max_unresolved_escalations) {
+        return { exceeded: true, reason: `${escalatedCount} unresolved escalations exceeds limit ${this.config.budget.max_unresolved_escalations}` };
+      }
     }
 
     return { exceeded: false };
@@ -248,6 +294,36 @@ export class WorkflowOrchestrator {
     });
 
     return verdict;
+  }
+
+  /**
+   * Ensure the repo has a .gitignore so agents don't commit dependency dirs.
+   */
+  private ensureGitignore(techStack: string[]): void {
+    const gitignorePath = join(this.repoRoot, ".gitignore");
+    if (existsSync(gitignorePath)) return;
+
+    const entries = ["node_modules/", "dist/", ".env", "*.tgz"];
+    const stackLower = techStack.map(s => s.toLowerCase());
+
+    if (stackLower.some(s => s.includes("python") || s.includes("django") || s.includes("flask"))) {
+      entries.push("__pycache__/", "*.pyc", ".venv/", "venv/");
+    }
+    if (stackLower.some(s => s.includes("rust") || s.includes("cargo"))) {
+      entries.push("target/");
+    }
+    if (stackLower.some(s => s.includes("go"))) {
+      entries.push("vendor/");
+    }
+
+    writeFileSync(gitignorePath, entries.join("\n") + "\n");
+
+    try {
+      execFileSync("git", ["add", ".gitignore"], { cwd: this.repoRoot, encoding: "utf-8" });
+      execFileSync("git", ["commit", "-m", "chore: add .gitignore"], { cwd: this.repoRoot, encoding: "utf-8" });
+    } catch {
+      // Non-fatal — file is written even if commit fails
+    }
   }
 
   private setupWorktree(issueNumber: number, wfRunId: string): string {
@@ -313,10 +389,11 @@ export class WorkflowOrchestrator {
       status: agentStatus,
       outputPath: result.outputPath,
       eventsPath: result.eventsPath,
+      costUsd: result.costUsd,
     });
 
     if (agentStatus === "failed") {
-      this.store.updateStatus(workflowRun.id, "failed", "Triage agent failed");
+      this.transitionStatus(workflowRun.id, "failed", "Triage agent failed");
       return this.store.getWorkflowRun(workflowRun.id)!;
     }
 
@@ -334,6 +411,7 @@ export class WorkflowOrchestrator {
     });
 
     this.store.updateStatus(workflowRun.id, "triaged", "Triage completed");
+    this.store.updateWorkflowRun(workflowRun.id, { nextAction: "Plan required" });
     return this.store.getWorkflowRun(workflowRun.id)!;
   }
 
@@ -374,10 +452,11 @@ export class WorkflowOrchestrator {
       status: agentStatus,
       outputPath: result.outputPath,
       eventsPath: result.eventsPath,
+      costUsd: result.costUsd,
     });
 
     if (agentStatus === "failed") {
-      this.store.updateStatus(workflowRun.id, "failed", "Triage agent failed");
+      this.transitionStatus(workflowRun.id, "failed", "Triage agent failed");
       await safeGitHub(() => this.github.addComment(
         this.repo, issueNumber,
         `**DevAgent triage failed.**\nThe triage agent exited with code ${result.exitCode}. This issue has been marked as blocked.`,
@@ -404,6 +483,7 @@ export class WorkflowOrchestrator {
       `**DevAgent Triage Summary**\n${summary}`,
     ), undefined);
     this.store.updateStatus(workflowRun.id, "triaged", "Triage completed");
+    this.store.updateWorkflowRun(workflowRun.id, { nextAction: "Plan required" });
     await safeGitHub(() => this.github.addLabels(this.repo, issueNumber, ["da:triaged"]), undefined);
     await safeGitHub(() => this.github.removeLabels(this.repo, issueNumber, ["da:ready"]), undefined);
 
@@ -454,10 +534,11 @@ export class WorkflowOrchestrator {
       status: agentStatus,
       outputPath: result.outputPath,
       eventsPath: result.eventsPath,
+      costUsd: result.costUsd,
     });
 
     if (agentStatus === "failed") {
-      this.store.updateStatus(workflowRun.id, "failed", "Plan agent failed");
+      this.transitionStatus(workflowRun.id, "failed", "Plan agent failed");
       await safeGitHub(() => this.github.addComment(
         this.repo, issueNumber,
         `**DevAgent plan failed.**\nThe plan agent exited with code ${result.exitCode}. This issue has been marked as failed.`,
@@ -496,6 +577,8 @@ export class WorkflowOrchestrator {
     } else {
       this.store.updateStatus(workflowRun.id, "plan_draft", "Plan completed");
     }
+    const planNextAction = this.isWatchMode ? "Gate review" : "Awaiting approval";
+    this.store.updateWorkflowRun(workflowRun.id, { nextAction: planNextAction });
 
     return this.store.getWorkflowRun(workflowRun.id)!;
   }
@@ -627,10 +710,11 @@ export class WorkflowOrchestrator {
       status: agentStatus,
       outputPath: result.outputPath,
       eventsPath: result.eventsPath,
+      costUsd: result.costUsd,
     });
 
     if (agentStatus === "failed") {
-      this.store.updateStatus(workflowRun.id, "failed", "Implement agent failed");
+      this.transitionStatus(workflowRun.id, "failed", "Implement agent failed");
       await safeGitHub(() => this.github.addComment(
         this.repo, issueNumber,
         `**DevAgent implementation failed.**\nThe implement agent exited with code ${result.exitCode}. This issue has been marked as failed.`,
@@ -688,10 +772,11 @@ export class WorkflowOrchestrator {
       status: agentStatus,
       outputPath: result.outputPath,
       eventsPath: result.eventsPath,
+      costUsd: result.costUsd,
     });
 
     if (agentStatus === "failed") {
-      this.store.updateStatus(workflowRun.id, "failed", "Verify agent failed");
+      this.transitionStatus(workflowRun.id, "failed", "Verify agent failed");
       await safeGitHub(() => this.github.addComment(
         this.repo, issueNumber,
         `**DevAgent verification failed.**\nThe verify agent exited with code ${result.exitCode}.`,
@@ -713,6 +798,7 @@ export class WorkflowOrchestrator {
     });
 
     this.store.updateStatus(workflowRun.id, "awaiting_local_verify", "Verification passed");
+    this.store.updateWorkflowRun(workflowRun.id, { nextAction: "Open PR" });
     return this.store.getWorkflowRun(workflowRun.id)!;
   }
 
@@ -815,10 +901,11 @@ export class WorkflowOrchestrator {
       status: result.exitCode === 0 ? "success" : "failed",
       outputPath: result.outputPath,
       eventsPath: result.eventsPath,
+      costUsd: result.costUsd,
     });
 
     if (result.exitCode !== 0) {
-      this.store.updateStatus(wfRun.id, "failed", "Review phase failed");
+      this.transitionStatus(wfRun.id, "failed", "Review phase failed");
       return this.store.getWorkflowRun(wfRun.id)!;
     }
 
@@ -845,8 +932,10 @@ export class WorkflowOrchestrator {
 
     if (verdict === "block" || blockingCount > 0) {
       this.store.updateStatus(wfRun.id, "auto_review_fix_loop", `Review found ${blockingCount} blocking issues`);
+      this.store.updateWorkflowRun(wfRun.id, { nextAction: "Repair required" });
     } else {
       this.store.updateStatus(wfRun.id, "awaiting_human_review", "Auto review passed");
+      this.store.updateWorkflowRun(wfRun.id, { nextAction: "Ready for human review" });
       await safeGitHub(() => this.github.addLabels(this.repo, issueNumber, ["da:awaiting-human"]), undefined);
       await safeGitHub(() => this.github.addComment(
         this.repo, issueNumber,
@@ -868,7 +957,7 @@ export class WorkflowOrchestrator {
     const currentRound = wfRun.repairRound + 1;
 
     if (currentRound > maxRounds) {
-      this.store.updateStatus(wfRun.id, "escalated", `Exceeded max repair rounds (${maxRounds})`);
+      this.transitionStatus(wfRun.id, "escalated", `Exceeded max repair rounds (${maxRounds})`);
       await safeGitHub(() => this.github.addComment(
         this.repo, issueNumber,
         `**Escalated.** Repair loop exceeded ${maxRounds} rounds. Human intervention needed.`
@@ -907,12 +996,13 @@ export class WorkflowOrchestrator {
       status: result.exitCode === 0 ? "success" : "failed",
       outputPath: result.outputPath,
       eventsPath: result.eventsPath,
+      costUsd: result.costUsd,
     });
 
     this.store.updateWorkflowRun(wfRun.id, { repairRound: currentRound });
 
     if (result.exitCode !== 0) {
-      this.store.updateStatus(wfRun.id, "failed", `Repair round ${currentRound} failed`);
+      this.transitionStatus(wfRun.id, "failed", `Repair round ${currentRound} failed`);
       return this.store.getWorkflowRun(wfRun.id)!;
     }
 
@@ -938,7 +1028,7 @@ export class WorkflowOrchestrator {
     ), undefined);
 
     if (currentRound >= maxRounds && (remainingFindings > 0 || !verificationPassed)) {
-      this.store.updateStatus(wfRun.id, "escalated", `Repair failed after ${maxRounds} rounds`);
+      this.transitionStatus(wfRun.id, "escalated", `Repair failed after ${maxRounds} rounds`);
       await safeGitHub(() => this.github.addComment(
         this.repo, issueNumber,
         `**Escalated.** Repair loop failed after ${maxRounds} rounds. Human intervention needed.`,
@@ -1026,11 +1116,12 @@ export class WorkflowOrchestrator {
       status: result.exitCode === 0 ? "success" : "failed",
       outputPath: result.outputPath,
       eventsPath: result.eventsPath,
+      costUsd: result.costUsd,
     });
     this.store.updateWorkflowRun(wfRun.id, { repairRound: currentRound });
 
     if (result.exitCode !== 0) {
-      this.store.updateStatus(wfRun.id, "failed", `Repair round ${currentRound} failed`);
+      this.transitionStatus(wfRun.id, "failed", `Repair round ${currentRound} failed`);
       return { run: this.store.getWorkflowRun(wfRun.id)!, summary: "" };
     }
 
@@ -1172,7 +1263,7 @@ export class WorkflowOrchestrator {
       );
 
       if (round === maxCIRounds) {
-        this.store.updateStatus(run.id, "escalated", `CI still failing after ${maxCIRounds + 1} fix attempts`);
+        this.transitionStatus(run.id, "escalated", `CI still failing after ${maxCIRounds + 1} fix attempts`);
         await safeGitHub(() => this.github.addComment(
           this.repo, issueNumber,
           `**CI still failing after ${maxCIRounds + 1} fix attempts.** Escalating for human review.`,
@@ -1293,14 +1384,14 @@ export class WorkflowOrchestrator {
 
     const budgetCheck1 = this.checkBudget(run.id);
     if (budgetCheck1.exceeded) {
-      this.store.updateStatus(run.id, "budget_exceeded", budgetCheck1.reason!);
+      this.transitionStatus(run.id, "budget_exceeded", budgetCheck1.reason!);
       return this.store.getWorkflowRun(run.id)!;
     }
 
     const triageOutput = this.store.getLatestArtifact(run.id, "triage_report");
     const triageVerdict = await this.runGate("triage", triageOutput?.data ?? {}, run.id, issueNumber);
     if (triageVerdict.action === "escalate") {
-      this.store.updateStatus(run.id, "escalated", triageVerdict.reason);
+      this.transitionStatus(run.id, "escalated", triageVerdict.reason);
       await safeGitHub(() => this.github.addComment(
         this.repo, issueNumber,
         `**Gate: triage rejected.** ${triageVerdict.reason}`,
@@ -1314,7 +1405,7 @@ export class WorkflowOrchestrator {
     // Phase 2: Plan + gate (with rework loop)
     const budgetCheck2 = this.checkBudget(run.id);
     if (budgetCheck2.exceeded) {
-      this.store.updateStatus(run.id, "budget_exceeded", budgetCheck2.reason!);
+      this.transitionStatus(run.id, "budget_exceeded", budgetCheck2.reason!);
       return this.store.getWorkflowRun(run.id)!;
     }
 
@@ -1332,7 +1423,7 @@ export class WorkflowOrchestrator {
       }
 
       if (planVerdict.action === "escalate" || attempt === maxGateReworks) {
-        this.store.updateStatus(run.id, "escalated",
+        this.transitionStatus(run.id, "escalated",
           planVerdict.action === "escalate"
             ? planVerdict.reason
             : `Plan gate rejected after ${attempt + 1} attempts`,
@@ -1355,7 +1446,7 @@ export class WorkflowOrchestrator {
     // Phase 3: Implement + gate
     const budgetCheck3 = this.checkBudget(run.id);
     if (budgetCheck3.exceeded) {
-      this.store.updateStatus(run.id, "budget_exceeded", budgetCheck3.reason!);
+      this.transitionStatus(run.id, "budget_exceeded", budgetCheck3.reason!);
       return this.store.getWorkflowRun(run.id)!;
     }
 
@@ -1364,28 +1455,76 @@ export class WorkflowOrchestrator {
 
     // Re-fetch run to get worktreePath set during implement
     run = this.store.getWorkflowRun(run.id)!;
-    const implWorkDir = run.worktreePath ?? this.repoRoot;
+    let implWorkDir = run.worktreePath ?? this.repoRoot;
 
-    // Stage and commit changes so the gate sees clean working tree
-    const implStatus = execFileSync("git", ["status", "--porcelain"], {
-      cwd: implWorkDir, encoding: "utf-8",
-    }).trim();
-    if (implStatus.length > 0) {
-      execFileSync("git", ["add", "-A"], { cwd: implWorkDir, encoding: "utf-8" });
-      execFileSync("git", ["commit", "-m", `feat(#${issueNumber}): implement changes`], {
+    for (let implAttempt = 0; implAttempt <= maxGateReworks; implAttempt++) {
+      // Stage and commit changes so the gate sees clean working tree
+      const implStatus = execFileSync("git", ["status", "--porcelain"], {
         cwd: implWorkDir, encoding: "utf-8",
-      });
-    }
+      }).trim();
+      if (implStatus.length > 0) {
+        execFileSync("git", ["add", "-A"], { cwd: implWorkDir, encoding: "utf-8" });
+        execFileSync("git", ["commit", "-m", `feat(#${issueNumber}): implement changes`], {
+          cwd: implWorkDir, encoding: "utf-8",
+        });
+      }
 
-    const implOutput = this.store.getLatestArtifact(run.id, "implementation_report");
-    const implVerdict = await this.runGate("implement", implOutput?.data ?? {}, run.id, issueNumber, implWorkDir);
-    if (implVerdict.action !== "proceed") {
-      this.store.updateStatus(run.id, "escalated", implVerdict.reason);
-      await safeGitHub(() => this.github.addComment(
-        this.repo, issueNumber,
-        `**Gate: implementation rejected.** ${implVerdict.reason}`,
-      ), undefined);
-      return this.store.getWorkflowRun(run.id)!;
+      const implOutput = this.store.getLatestArtifact(run.id, "implementation_report");
+      const implVerdict = await this.runGate("implement", implOutput?.data ?? {}, run.id, issueNumber, implWorkDir);
+
+      if (implVerdict.action === "proceed") {
+        break;
+      }
+
+      if (implVerdict.action === "escalate" || implAttempt === maxGateReworks) {
+        this.transitionStatus(run.id, "escalated",
+          implVerdict.action === "escalate"
+            ? implVerdict.reason
+            : `Implementation gate rejected after ${implAttempt + 1} attempts`,
+        );
+        await safeGitHub(() => this.github.addComment(
+          this.repo, issueNumber,
+          `**Gate: implementation rejected.** ${implVerdict.reason}`,
+        ), undefined);
+        return this.store.getWorkflowRun(run.id)!;
+      }
+
+      // Rework: launch repair phase with gate findings
+      const gateArtifact = this.store.getLatestArtifact(run.id, "gate_verdict");
+      const findings = (gateArtifact?.data?.findings as unknown[]) ?? [];
+      const repairRun = this.store.createAgentRun({
+        workflowRunId: run.id,
+        phase: "repair",
+        executorKind: "repairer",
+        triggeredBy: "policy",
+      });
+      this.store.updateWorkflowRun(run.id, { currentPhase: "repair" });
+
+      const repairResult = await this.launcher.launch({
+        phase: "repair",
+        repoPath: implWorkDir,
+        runId: repairRun.id,
+        input: {
+          issueNumber,
+          findings,
+          round: implAttempt + 1,
+        },
+      });
+
+      this.store.completeAgentRun(repairRun.id, {
+        status: repairResult.exitCode === 0 ? "success" : "failed",
+        outputPath: repairResult.outputPath,
+        eventsPath: repairResult.eventsPath,
+        costUsd: repairResult.costUsd,
+      });
+
+      if (repairResult.exitCode !== 0) {
+        this.transitionStatus(run.id, "escalated", `Implementation repair failed on attempt ${implAttempt + 1}`);
+        return this.store.getWorkflowRun(run.id)!;
+      }
+
+      run = this.store.getWorkflowRun(run.id)!;
+      implWorkDir = run.worktreePath ?? this.repoRoot;
     }
 
     if (this.checkPause(run.id)) return this.store.getWorkflowRun(run.id)!;
@@ -1394,7 +1533,7 @@ export class WorkflowOrchestrator {
     // Phase 4: Verify + gate
     const budgetCheck4 = this.checkBudget(run.id);
     if (budgetCheck4.exceeded) {
-      this.store.updateStatus(run.id, "budget_exceeded", budgetCheck4.reason!);
+      this.transitionStatus(run.id, "budget_exceeded", budgetCheck4.reason!);
       return this.store.getWorkflowRun(run.id)!;
     }
 
@@ -1404,7 +1543,7 @@ export class WorkflowOrchestrator {
     const verifyOutput = this.store.getLatestArtifact(run.id, "verification_report");
     const verifyVerdict = await this.runGate("verify", verifyOutput?.data ?? {}, run.id, issueNumber, implWorkDir);
     if (verifyVerdict.action !== "proceed") {
-      this.store.updateStatus(run.id, "escalated", verifyVerdict.reason);
+      this.transitionStatus(run.id, "escalated", verifyVerdict.reason);
       await safeGitHub(() => this.github.addComment(
         this.repo, issueNumber,
         `**Gate: verification rejected.** ${verifyVerdict.reason}`,
@@ -1474,11 +1613,14 @@ export class WorkflowOrchestrator {
 
   /**
    * Bootstrap a project from a brief markdown file.
-   * Parses the brief, seeds backlog items, and stores a bootstrap artifact.
+   * Parses the brief, seeds backlog items, creates GitHub issues, and stores a bootstrap artifact.
    */
   async bootstrapFromBrief(briefPath: string): Promise<WorkflowRun> {
     const brief = loadProjectBrief(briefPath);
     const items = seedBacklog(brief);
+
+    // Ensure .gitignore exists so agents don't commit node_modules etc.
+    this.ensureGitignore(brief.techStack);
 
     // Create a parent workflow run for the bootstrap
     const workflowRun = this.store.createWorkflowRun({
@@ -1490,16 +1632,88 @@ export class WorkflowOrchestrator {
       metadata: { title: brief.name, briefName: brief.name, itemCount: items.length },
     });
 
-    // Store bootstrap artifact with the full plan
+    // Create GitHub issues for each backlog item (best-effort)
+    const issueNumbers: number[] = [];
+    for (const item of items) {
+      try {
+        const created = await this.github.createIssue(this.repo, {
+          title: item.title,
+          body: item.body,
+          labels: item.labels,
+        });
+        issueNumbers.push(created.number);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[orchestrator] Failed to create issue for "${item.title}" (non-fatal): ${msg}\n`);
+      }
+    }
+
+    // Store bootstrap artifact with the full plan and created issue numbers
     this.store.createArtifact({
       workflowRunId: workflowRun.id,
       type: "bootstrap_report",
       phase: "triage",
       summary: `Bootstrap: ${brief.name} — ${items.length} work items`,
-      data: { brief, items } as unknown as Record<string, unknown>,
+      data: { brief, items, issueNumbers } as unknown as Record<string, unknown>,
+    });
+
+    // Review gate check in watch mode (REQ-7.4)
+    if (this.isWatchMode) {
+      const verdict = await this.runGate("triage", { brief, items } as any, workflowRun.id, 0);
+      if (verdict.action !== "proceed") {
+        this.transitionStatus(workflowRun.id, "escalated", verdict.reason);
+        return this.store.getWorkflowRun(workflowRun.id)!;
+      }
+    }
+
+    // Create approval request for bootstrap plan
+    this.store.createApprovalRequest({
+      workflowRunId: workflowRun.id,
+      phase: "triage",
+      summary: `Bootstrap plan: ${brief.name} — ${items.length} work items to create`,
     });
 
     this.store.updateStatus(workflowRun.id, "triaged", "Bootstrap plan created");
+    this.store.updateWorkflowRun(workflowRun.id, { nextAction: "Plan required" });
     return this.store.getWorkflowRun(workflowRun.id)!;
+  }
+
+  /**
+   * Get aggregated project status for all runs sharing a sourceRef.
+   */
+  getProjectStatus(sourceRef: string): {
+    totalIssues: number;
+    completedIssues: number;
+    failedIssues: number;
+    escalatedIssues: number;
+    totalCost: number;
+    withinBudget: boolean;
+    allDone: boolean;
+  } {
+    const allRuns = this.store.listAll();
+    const projectRuns = allRuns.filter((r) => r.sourceRef === sourceRef);
+
+    let totalCost = 0;
+    for (const run of projectRuns) {
+      const agentRuns = this.store.getAgentRunsByWorkflow(run.id);
+      totalCost += agentRuns.reduce((sum, ar) => sum + (ar.costUsd ?? 0), 0);
+    }
+
+    const completedIssues = projectRuns.filter((r) => r.status === "done").length;
+    const failedIssues = projectRuns.filter((r) => r.status === "failed").length;
+    const escalatedIssues = projectRuns.filter((r) => r.status === "escalated").length;
+
+    const budgetLimit = this.config.budget.run_max_cost_usd;
+    const withinBudget = budgetLimit <= 0 || totalCost < budgetLimit;
+
+    return {
+      totalIssues: projectRuns.length,
+      completedIssues,
+      failedIssues,
+      escalatedIssues,
+      totalCost,
+      withinBudget,
+      allDone: projectRuns.length > 0 && completedIssues === projectRuns.length,
+    };
   }
 }

@@ -155,6 +155,35 @@ export class MockGitHubGateway implements GitHubGateway {
     return this.ciFailureLogs;
   }
 
+  createdIssues: { repo: string; title: string; body: string; labels: string[]; number: number; url: string }[] = [];
+  private nextIssueNumber = 1;
+
+  async createIssue(repo: string, params: { title: string; body: string; labels?: string[] }): Promise<{ number: number; url: string }> {
+    const number = this.nextIssueNumber++;
+    const url = `https://github.com/${repo}/issues/${number}`;
+    this.createdIssues.push({
+      repo,
+      title: params.title,
+      body: params.body,
+      labels: params.labels ?? [],
+      number,
+      url,
+    });
+    // Also seed the issue so it can be fetched later
+    this.seedIssue(repo, {
+      number,
+      title: params.title,
+      body: params.body,
+      labels: params.labels ?? [],
+      url,
+      state: "open",
+      author: "mock-bot",
+      createdAt: new Date().toISOString(),
+      comments: [],
+    });
+    return { number, url };
+  }
+
   async pushBranch(repoPath: string, branch: string, _commitMessage?: string): Promise<void> {
     this.pushedBranches.push({ repoPath, branch });
   }

@@ -1,29 +1,13 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { WorkflowRun } from "../../state/types.js";
+import { humanStatus, operatorStatusColor, toOperatorStatus, suggestedAction } from "../status-map.js";
 
 interface RunCardProps {
   run: WorkflowRun;
   isSelected: boolean;
   isActive: boolean;
 }
-
-const STATUS_BADGE: Record<string, { icon: string; color: string }> = {
-  new: { icon: " ", color: "white" },
-  triaged: { icon: "T", color: "cyan" },
-  plan_draft: { icon: "?", color: "yellow" },
-  plan_revision: { icon: "?", color: "yellow" },
-  plan_accepted: { icon: "P", color: "green" },
-  implementing: { icon: "*", color: "blue" },
-  awaiting_local_verify: { icon: "V", color: "blue" },
-  draft_pr_opened: { icon: "#", color: "cyan" },
-  auto_review_fix_loop: { icon: "X", color: "magenta" },
-  awaiting_human_review: { icon: "@", color: "cyan" },
-  ready_to_merge: { icon: "M", color: "green" },
-  done: { icon: "+", color: "green" },
-  escalated: { icon: "!", color: "yellow" },
-  failed: { icon: "!", color: "red" },
-};
 
 function formatAge(dateStr: string): string {
   const ms = Date.now() - new Date(dateStr).getTime();
@@ -35,35 +19,46 @@ function formatAge(dateStr: string): string {
 
 export function RunCard({ run, isSelected, isActive }: RunCardProps) {
   const title = (run.metadata as Record<string, unknown>)?.title as string | undefined;
-  const titleShort = title ? (title.length > 18 ? title.slice(0, 17) + "\u2026" : title) : "";
-  const badge = STATUS_BADGE[run.status] ?? { icon: "?", color: "gray" };
+  const titleShort = title ? (title.length > 22 ? title.slice(0, 21) + "\u2026" : title) : "";
   const age = formatAge(run.updatedAt);
+  const opStatus = toOperatorStatus(run.status);
+  const statusColor = operatorStatusColor(opStatus);
+  const action = suggestedAction(run.status);
 
+  // Line 1: ID + title
+  // Line 2: phase + human status + age
+  // Line 3: badges (PR, blocked, suggested action)
   return (
     <Box flexDirection="column" paddingLeft={1}>
+      {/* Line 1: ID + title */}
       <Text
         bold={isSelected}
         inverse={isSelected}
         color={isSelected ? "blue" : undefined}
       >
-        <Text color={badge.color}>{badge.icon}</Text>
         {isActive ? <Text color="green">*</Text> : " "}
         #{run.issueNumber} {titleShort}
       </Text>
+      {/* Line 2: phase + human status + age */}
       <Text dimColor>
         {"  "}
-        {run.currentPhase ?? run.status}
+        {run.currentPhase ?? "-"}
+        <Text color={statusColor}> {humanStatus(run.status)}</Text>
         {run.repairRound > 0 ? ` r${run.repairRound}` : ""}
         {" "}
         {age}
-        {run.agentProfile ? ` ${run.agentProfile}` : ""}
       </Text>
-      {run.blockedReason && (
-        <Text dimColor color="red">
-          {"  "}
-          {run.blockedReason.length > 40 ? run.blockedReason.slice(0, 39) + "\u2026" : run.blockedReason}
-        </Text>
-      )}
+      {/* Line 3: badges */}
+      <Text dimColor>
+        {"  "}
+        {run.prUrl ? <Text color="green">PR </Text> : null}
+        {run.blockedReason ? (
+          <Text color="red">! {run.blockedReason.length > 20 ? run.blockedReason.slice(0, 19) + "\u2026" : run.blockedReason} </Text>
+        ) : null}
+        {isSelected && action ? (
+          <Text color="yellow">[{action.key}] {action.label}</Text>
+        ) : null}
+      </Text>
     </Box>
   );
 }

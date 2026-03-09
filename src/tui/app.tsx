@@ -11,7 +11,7 @@ import { useWorkflowRuns } from "./hooks/use-workflow-runs.js";
 import { useEventLog } from "./hooks/use-event-log.js";
 import { useProcessOutput } from "./hooks/use-process-output.js";
 import { useKeybindings } from "./hooks/use-keybindings.js";
-import { KanbanBoard, KANBAN_COLUMNS } from "./components/kanban-board.js";
+import { KanbanBoard, KANBAN_COLUMNS, OPERATOR_BUCKETS } from "./components/kanban-board.js";
 import { InputBar } from "./components/input-bar.js";
 import { RunHeader } from "./components/run-header.js";
 import { ArtifactPane } from "./components/artifact-pane.js";
@@ -32,6 +32,8 @@ import { SettingsView } from "./components/settings-view.js";
 import { CommandPalette } from "./components/command-palette.js";
 import type { PaletteCommand } from "./components/command-palette.js";
 import { HelpDialog } from "./components/help-dialog.js";
+import { SummaryBar } from "./components/summary-bar.js";
+import { toOperatorStatus } from "./status-map.js";
 import { uiReducer, initialUIState } from "./state.js";
 import type { FocusPane, LogMode, GateStrictness, RunPriority } from "./state.js";
 
@@ -184,11 +186,21 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
 
   // ─── Navigation helpers ─────────────────────────────────────
 
-  const getColumnRuns = useCallback((colIndex: number) => {
-    const col = KANBAN_COLUMNS[colIndex];
-    if (!col) return [];
-    return filteredRuns.filter((r) => col.statuses.includes(r.status));
+  // Visible (non-empty) operator buckets for navigation
+  const visibleBuckets = React.useMemo(() => {
+    return OPERATOR_BUCKETS
+      .map((bucket, _i) => ({
+        bucket,
+        runs: filteredRuns.filter(bucket.match),
+      }))
+      .filter((b) => b.runs.length > 0);
   }, [filteredRuns]);
+
+  const getColumnRuns = useCallback((colIndex: number) => {
+    const visible = visibleBuckets[colIndex];
+    if (!visible) return [];
+    return visible.runs;
+  }, [visibleBuckets]);
 
   const handleNavigate = useCallback((direction: "up" | "down" | "left" | "right") => {
     if (ui.screen === "approvals") {
@@ -218,7 +230,7 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
       newCol = Math.max(0, ui.focusedColumnIndex - 1);
       newRow = 0;
     } else if (direction === "right") {
-      newCol = Math.min(KANBAN_COLUMNS.length - 1, ui.focusedColumnIndex + 1);
+      newCol = Math.min(Math.max(0, visibleBuckets.length - 1), ui.focusedColumnIndex + 1);
       newRow = 0;
     } else if (direction === "up") {
       newRow = Math.max(0, ui.focusedRowIndex - 1);
@@ -568,12 +580,43 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
   }, []);
 
   const handleNewRunSubmit = useCallback(() => {
-    const sourceId = parseInt(ui.newRunForm.sourceId.trim(), 10);
+    const { sourceType, mode, profile, runner, model, gateStrictness, priority } = ui.newRunForm;
+    const rawSourceId = ui.newRunForm.sourceId.trim();
+
+    if (sourceType === "project-brief") {
+      // For project-brief, sourceId is a file path, not a number
+      if (!rawSourceId) {
+        showStatus("Brief path required");
+        return;
+      }
+      dispatch({ type: "CLOSE_DIALOG" });
+      showStatus(`Bootstrapping from brief: ${rawSourceId}...`);
+
+      orchestrator.bootstrapFromBrief(rawSourceId).then(
+        (run) => {
+          const updates: Record<string, unknown> = {
+            metadata: { ...(run.metadata as Record<string, unknown>), sourceType, gateStrictness, priority },
+          };
+          if (profile) (updates as any).agentProfile = profile;
+          if (runner) (updates as any).runnerId = runner;
+          if (model) (updates as any).requestedModel = model;
+          store.updateWorkflowRun(run.id, updates as any);
+          dispatch({ type: "OPEN_RUN", runId: run.id });
+          showStatus(`Bootstrap complete: ${run.status} -- press C to continue`);
+        },
+        (err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          showStatus(`Bootstrap failed: ${msg}`);
+        },
+      );
+      return;
+    }
+
+    const sourceId = parseInt(rawSourceId, 10);
     if (!sourceId || isNaN(sourceId)) {
       showStatus("Invalid number");
       return;
     }
-    const { sourceType, mode, profile, runner, model, gateStrictness, priority } = ui.newRunForm;
     dispatch({ type: "CLOSE_DIALOG" });
 
     const isAutoMode = mode === "watch" || mode === "autopilot-once";
@@ -804,6 +847,9 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
               isActive={!!activeProcessId}
               gateVerdicts={gateVerdicts}
               latestAgentRun={agentRuns.length > 0 ? agentRuns[agentRuns.length - 1] : null}
+              agentRunCount={agentRuns.length}
+              totalCostUsd={agentRuns.reduce((sum, ar) => sum + (ar.costUsd ?? 0), 0)}
+              budgetConfig={config?.budget}
             />
           </Box>
 
@@ -883,11 +929,27 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
       ) : (
         /* ── Dashboard screen ─────────────────────────────── */
         <>
+          {/* Summary bar — one thin line with counts */}
+          <SummaryBar
+            mode={runs.length > 0 ? runs[0].mode : null}
+            runningCount={runs.filter(r => toOperatorStatus(r.status) === "Running").length}
+            needsActionCount={runs.filter(r => toOperatorStatus(r.status) === "Needs Action").length}
+            blockedCount={runs.filter(r => toOperatorStatus(r.status) === "Blocked").length}
+            failedCount={runs.filter(r => r.status === "failed").length}
+            doneCount={runs.filter(r => toOperatorStatus(r.status) === "Done").length}
+            totalCount={runs.length}
+            autopilotOn={autopilotRunning}
+            activeRunners={registry.list().length}
+          />
           <AutopilotBar
             running={autopilotRunning}
             lastPoll={autopilotStats.lastPoll}
             activeCount={autopilotStats.activeCount}
             totalDispatched={autopilotStats.totalDispatched}
+            escalatedCount={runs.filter(r => r.status === "escalated").length}
+            maxEscalations={config?.budget.max_unresolved_escalations}
+            totalCostUsd={store.getRecentAgentRuns(1000).reduce((sum, ar) => sum + (ar.costUsd ?? 0), 0)}
+            sessionMaxCostUsd={config?.budget.session_max_cost_usd}
           />
           {ui.filterActive && (
             <Box paddingLeft={1} flexShrink={0}>
@@ -906,43 +968,8 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
             activeRunId={activeProcessId}
             focusedColumnIndex={ui.focusedColumnIndex}
             isFocused={true}
+            compactMode={true}
           />
-          {selectedRun && (
-            <Box paddingLeft={1} flexShrink={0}>
-              <Text bold color={activeProcessId ? "green" : "white"}>
-                #{selectedRun.issueNumber}{" "}
-                {((selectedRun.metadata as Record<string, unknown>)?.title as string) ?? ""}{" "}
-                [{selectedRun.status}]
-                {selectedRun.currentPhase ? ` phase:${selectedRun.currentPhase}` : ""}
-                {activeProcessId ? " RUNNING" : ""}
-              </Text>
-            </Box>
-          )}
-          {!selectedRun && (
-            <Box paddingLeft={1} flexShrink={0}>
-              <Text dimColor>No task selected -- press N to start a new run</Text>
-            </Box>
-          )}
-          {/* Inline logs below kanban */}
-          <Box
-            borderStyle="single"
-            borderColor="gray"
-            flexDirection="column"
-            flexGrow={1}
-            paddingLeft={1}
-            overflow="hidden"
-          >
-            {logEntries.length === 0 ? (
-              <Text dimColor>No logs yet -- select a task and press C to continue</Text>
-            ) : (
-              logEntries.slice(-(termHeight - 16)).map((entry, i) => (
-                <Text key={i} wrap="truncate">
-                  <Text dimColor>{entry.timestamp.slice(11, 19)} </Text>
-                  {entry.text}
-                </Text>
-              ))
-            )}
-          </Box>
         </>
       )}
 

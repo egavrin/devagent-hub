@@ -16,6 +16,7 @@ export interface RegisteredRunner {
   lastHeartbeat: Date;
   capabilities: RunnerCapabilities | null;
   stats: RunnerStats;
+  healthStatus?: "healthy" | "degraded" | "unhealthy";
 }
 
 /**
@@ -124,8 +125,19 @@ export class RunnerRegistry {
       }
     }
 
-    // Fallback: return the runner with the best success rate, or the first available.
+    // Prefer healthy runners over degraded/unhealthy ones.
+    const healthPriority = (r: RegisteredRunner): number => {
+      if (!r.healthStatus || r.healthStatus === "healthy") return 2;
+      if (r.healthStatus === "degraded") return 1;
+      return 0; // unhealthy
+    };
+
+    // Fallback: return the runner with best health, then best success rate, or the first available.
     return available.reduce((best, curr) => {
+      const bestHealth = healthPriority(best);
+      const currHealth = healthPriority(curr);
+      if (currHealth !== bestHealth) return currHealth > bestHealth ? curr : best;
+
       if (curr.stats.totalRuns === 0 && best.stats.totalRuns === 0) return best;
       if (curr.stats.totalRuns === 0) return best;
       if (best.stats.totalRuns === 0) return curr;

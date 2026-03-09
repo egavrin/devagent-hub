@@ -50,6 +50,12 @@ export interface SelectionRule {
   phases: string[];
   /** Required complexity level for this rule to match (from triage). */
   complexity?: string[];
+  /** Required risk level(s) for this rule to match (e.g., ["high", "critical"]). */
+  risk?: string[];
+  /** Only match if changed files count <= this threshold. */
+  max_changed_files?: number;
+  /** Runner must have all of these capabilities to match. */
+  required_capabilities?: string[];
   /** Profile name to use when this rule matches. */
   profile: string;
 }

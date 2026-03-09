@@ -32,4 +32,5 @@ export interface GitHubGateway {
   checkBranchConflicts(repoPath: string, branch: string, base: string): Promise<{ conflicted: boolean; conflictFiles: string[] }>;
   markPRReady(repo: string, prNumber: number): Promise<void>;
   fetchCIFailureLogs(repo: string, prNumber: number): Promise<{ check: string; log: string }[]>;
+  createIssue(repo: string, params: { title: string; body: string; labels?: string[] }): Promise<{ number: number; url: string }>;
 }

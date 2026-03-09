@@ -146,6 +146,7 @@ export interface ReviewFinding {
 // ─── Runner Description ──────────────────────────────────────
 
 export interface RunnerDescription {
+  id?: string;
   version: string;
   contractVersion?: number;
   supportedPhases: string[];
@@ -154,4 +155,6 @@ export interface RunnerDescription {
   supportedReasoningLevels: string[];
   mcpServers?: string[];
   tools?: string[];
+  load?: number;         // 0-1 current load
+  healthStatus?: string; // healthy/degraded/unhealthy
 }

@@ -3,6 +3,7 @@ import type { LaunchResult } from "./launcher.js";
 export interface MockPhaseResponse {
   exitCode: number;
   output: unknown;
+  costUsd?: number;
 }
 
 export class MockRunLauncher {
@@ -39,6 +40,7 @@ export class MockRunLauncher {
       outputPath: `/tmp/mock/${params.runId}/${params.phase}-output.json`,
       eventsPath: `/tmp/mock/${params.runId}/${params.phase}-events.jsonl`,
       output: response.output,
+      costUsd: response.costUsd,
     };
   }
 }

@@ -451,6 +451,36 @@ export class GhCliGateway implements GitHubGateway {
     gh(["pr", "ready", String(prNumber)], repo);
   }
 
+  async createIssue(repo: string, params: { title: string; body: string; labels?: string[] }): Promise<{ number: number; url: string }> {
+    // First try with labels; if labels don't exist, retry without them
+    const args = [
+      "issue", "create",
+      "--title", params.title,
+      "--body", params.body,
+    ];
+    if (params.labels && params.labels.length > 0) {
+      for (const label of params.labels) {
+        args.push("--label", label);
+      }
+    }
+    let url: string;
+    try {
+      url = gh(args, repo).trim();
+    } catch {
+      // Labels may not exist — retry without them
+      const fallbackArgs = [
+        "issue", "create",
+        "--title", params.title,
+        "--body", params.body,
+      ];
+      url = gh(fallbackArgs, repo).trim();
+    }
+    // Extract issue number from URL (e.g., https://github.com/owner/repo/issues/42)
+    const match = url.match(/\/issues\/(\d+)/);
+    const number = match ? parseInt(match[1], 10) : 0;
+    return { number, url };
+  }
+
   async fetchCIFailureLogs(repo: string, prNumber: number): Promise<{ check: string; log: string }[]> {
     const checksRaw = gh(
       ["pr", "checks", String(prNumber), "--json", "name,state,bucket,link"],

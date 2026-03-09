@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS status_transitions (
   to_status TEXT NOT NULL,
   timestamp TEXT NOT NULL,
   reason TEXT NOT NULL,
+  artifact_id TEXT,
   FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs(id)
 );
 
@@ -162,6 +163,7 @@ interface TransitionRow {
   to_status: string;
   timestamp: string;
   reason: string;
+  artifact_id: string | null;
 }
 
 interface ArtifactRow {
@@ -389,6 +391,13 @@ export class StateStore {
     if (!apColNames.has("reviewer_run_id")) {
       this.db.exec("ALTER TABLE approval_requests ADD COLUMN reviewer_run_id TEXT");
     }
+
+    // Add artifact_id column to status_transitions if missing
+    const stCols = this.db.prepare("PRAGMA table_info(status_transitions)").all() as Array<{ name: string }>;
+    const stColNames = new Set(stCols.map((c) => c.name));
+    if (!stColNames.has("artifact_id")) {
+      this.db.exec("ALTER TABLE status_transitions ADD COLUMN artifact_id TEXT");
+    }
   }
 
   createWorkflowRun(opts: {
@@ -439,7 +448,8 @@ export class StateStore {
   updateStatus(
     id: string,
     to: WorkflowStatus,
-    reason: string
+    reason: string,
+    artifactId?: string
   ): WorkflowRun {
     const current = this.getWorkflowRun(id);
     if (!current) {
@@ -460,10 +470,10 @@ export class StateStore {
 
     this.db
       .prepare(
-        `INSERT INTO status_transitions (workflow_run_id, from_status, to_status, timestamp, reason)
-         VALUES (?, ?, ?, ?, ?)`
+        `INSERT INTO status_transitions (workflow_run_id, from_status, to_status, timestamp, reason, artifact_id)
+         VALUES (?, ?, ?, ?, ?, ?)`
       )
-      .run(id, from, to, now, reason);
+      .run(id, from, to, now, reason, artifactId ?? null);
 
     return this.getWorkflowRun(id)!;
   }
@@ -648,7 +658,7 @@ export class StateStore {
   getTransitions(workflowRunId: string): StatusTransition[] {
     const rows = this.db
       .prepare(
-        "SELECT from_status, to_status, timestamp, reason FROM status_transitions WHERE workflow_run_id = ? ORDER BY id"
+        "SELECT from_status, to_status, timestamp, reason, artifact_id FROM status_transitions WHERE workflow_run_id = ? ORDER BY id"
       )
       .all(workflowRunId) as TransitionRow[];
 
@@ -657,6 +667,7 @@ export class StateStore {
       to: row.to_status as WorkflowStatus,
       timestamp: row.timestamp,
       reason: row.reason,
+      artifactId: row.artifact_id ?? null,
     }));
   }
 

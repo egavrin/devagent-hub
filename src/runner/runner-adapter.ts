@@ -16,6 +16,18 @@ export interface RunnerAdapter {
 
   /** Query the runner for its capabilities. Returns null if unsupported. */
   describe(): RunnerCapabilities | null;
+
+  /** Query runner health status. Returns null if unsupported. */
+  health(): RunnerHealth | null;
+
+  /** Cancel a running workflow run. Returns true if cancellation was accepted. */
+  cancel(runId: string): boolean;
+}
+
+export interface RunnerHealth {
+  status: "healthy" | "degraded" | "unhealthy";
+  load: number;        // 0-1, current load
+  message?: string;
 }
 
 export interface LaunchParams {

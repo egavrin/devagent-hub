@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { RunnerAdapter, LaunchParams, RunnerCapabilities } from "./runner-adapter.js";
+import type { RunnerAdapter, LaunchParams, RunnerCapabilities, RunnerHealth } from "./runner-adapter.js";
 import type { LaunchResult } from "./launcher.js";
 import { buildSkillContext } from "./skill-prompt.js";
 
@@ -240,6 +240,14 @@ export class OpenCodeRunner implements RunnerAdapter {
     } catch {
       return null;
     }
+  }
+
+  health(): RunnerHealth | null {
+    return null;
+  }
+
+  cancel(_runId: string): boolean {
+    return false;
   }
 
   /**
