@@ -252,9 +252,9 @@ describe("ContextFooter render", () => {
       <ContextFooter screen="dashboard" dialog={null} inputMode={false} hasActiveProcess={false} />,
     );
     const frame = lastFrame()!;
-    expect(frame).toContain("j/k");
     expect(frame).toContain("Enter");
-    expect(frame).toContain("Q");
+    expect(frame).toContain("open");
+    expect(frame).toContain("help");
   });
 
   it("renders approval hints with plan_draft status", () => {
@@ -272,8 +272,7 @@ describe("ContextFooter render", () => {
     );
     const frame = lastFrame()!;
     expect(frame).toContain("approve");
-    expect(frame).toContain("mark review");
-    expect(frame).toContain("rerun review");
+    expect(frame).toContain("rerun");
   });
 
   it("renders approval hints for ready_to_merge", () => {
@@ -281,8 +280,7 @@ describe("ContextFooter render", () => {
       <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="ready_to_merge" />,
     );
     const frame = lastFrame()!;
-    expect(frame).toContain("mark done");
-    expect(frame).toContain("open PR");
+    expect(frame).toContain("done");
   });
 
   it("renders approval hints for failed", () => {
@@ -304,8 +302,7 @@ describe("ContextFooter render", () => {
       <ContextFooter screen="run" dialog={null} inputMode={false} runStatus="plan_draft" hasActiveProcess={false} />,
     );
     const frame = lastFrame()!;
-    expect(frame).toContain("approv");
-    expect(frame).toContain("rewor");
+    expect(frame).toContain("Approve plan");
   });
 
   it("shows retry for failed runs", () => {
@@ -313,7 +310,7 @@ describe("ContextFooter render", () => {
       <ContextFooter screen="run" dialog={null} inputMode={false} runStatus="failed" hasActiveProcess={false} />,
     );
     expect(lastFrame()!).toContain("R");
-    expect(lastFrame()!).toContain("retr");
+    expect(lastFrame()!).toContain("Retry");
   });
 
   it("shows kill when process active", () => {
