@@ -25,6 +25,9 @@
     "vitest": "^3.0.0"
   },
   "dependencies": {
+    "@devagent-runner/adapters": "file:../devagent-runner/packages/adapters",
+    "@devagent-runner/local-runner": "file:../devagent-runner/packages/local-runner",
+    "@devagent-sdk/types": "file:../devagent-sdk/packages/types",
     "ink": "^6.8.0",
     "ink-text-input": "^6.0.0",
     "react": "^19.2.4",

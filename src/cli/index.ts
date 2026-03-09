@@ -1,91 +1,202 @@
 #!/usr/bin/env bun
 
-import {
-  runCommand,
-  triageCommand,
-  statusCommand,
-  listCommand,
-  uiCommand,
-  approveCommand,
-  reworkCommand,
-  resumeCommand,
-  resolveCommentsCommand,
-  fixCICommand,
-  artifactsCommand,
-  autopilotCommand,
-  doctorCommand,
-  bootstrapCommand,
-} from "./commands.js";
+import { execFileSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { CanonicalStore } from "../persistence/canonical-store.js";
+import { GhCliGateway } from "../github/gh-cli-gateway.js";
+import { loadWorkflowConfig } from "../workflow/config.js";
+import { LocalRunnerClient } from "../runner-client/local-runner-client.js";
+import { WorkflowService } from "../workflows/service.js";
 
-const [command, ...args] = process.argv.slice(2);
+const CONFIG_DIR = join(homedir(), ".config", "devagent-hub");
+const DB_PATH = join(CONFIG_DIR, "state.db");
 
-if (command === "help") {
-  console.log(`devagent-hub - GitHub-first workflow orchestrator for DevAgent
+function ensureConfigDir(): void {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+}
+
+function detectRepoRoot(): string {
+  return execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    encoding: "utf-8",
+  }).trim();
+}
+
+function detectRepoFullName(): string {
+  const raw = execFileSync("gh", ["repo", "view", "--json", "nameWithOwner"], {
+    encoding: "utf-8",
+  });
+  return (JSON.parse(raw) as { nameWithOwner: string }).nameWithOwner;
+}
+
+function argValue(args: string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
+function createService(): { store: CanonicalStore; service: WorkflowService } {
+  ensureConfigDir();
+  const repoRoot = detectRepoRoot();
+  const repoFullName = detectRepoFullName();
+  const config = loadWorkflowConfig(repoRoot);
+  const store = new CanonicalStore(DB_PATH);
+  const project = store.upsertProject({
+    id: repoFullName,
+    name: repoFullName.split("/")[1] ?? repoFullName,
+    repoRoot,
+    repoFullName,
+    workflowConfigPath: join(repoRoot, "WORKFLOW.md"),
+    allowedExecutors: ["devagent", "codex", "claude", "opencode"],
+  });
+  return {
+    store,
+    service: new WorkflowService(
+      store,
+      new GhCliGateway(),
+      new LocalRunnerClient(),
+      project,
+      config,
+    ),
+  };
+}
+
+function printHelp(): void {
+  console.log(`devagent-hub
 
 Commands:
-  (default)             Launch interactive TUI dashboard
-  run <issue-number>    Run full workflow for a GitHub issue [--mode assisted|watch|autopilot]
-  autopilot             Start autopilot daemon (polls for issues, dispatches runs)
-  triage <issue-number> Run triage phase only
-  approve <run-id>      Approve plan and proceed to implementation
-  rework <run-id>       Send plan back for revision (--note "...")
-  resume <run-id>       Resume a paused/failed run from current status
-  resolve-comments <n>  Resolve PR review comments for issue #n
-  fix-ci <n>            Fix CI failures for issue #n [--ready]
-  status <run-id>       Show workflow run details [--json]
-  artifacts <run-id>    Show artifacts for a workflow run
-  list                  List workflow runs [--json]
-  bootstrap <brief>     Bootstrap a project from a brief file
-  doctor                Check runner compatibility and report issues
-  help                  Show this help
-
-Options:
-  --repo <owner/repo>   GitHub repository (default: from git remote)
+  project add
+  issue sync
+  run start --issue <number>
+  run resume <id>
+  run cancel <id>
+  pr open <id>
+  list
+  status <id>
+  help
 `);
+}
+
+const [command, subcommand, ...args] = process.argv.slice(2);
+
+if (!command || command === "help") {
+  printHelp();
   process.exit(0);
 }
 
-switch (command) {
-  case "run":
-    await runCommand(args);
-    break;
-  case "autopilot":
-    await autopilotCommand(args);
-    break;
-  case "triage":
-    await triageCommand(args);
-    break;
-  case "approve":
-    await approveCommand(args);
-    break;
-  case "rework":
-    await reworkCommand(args);
-    break;
-  case "resume":
-    await resumeCommand(args);
-    break;
-  case "resolve-comments":
-    await resolveCommentsCommand(args);
-    break;
-  case "fix-ci":
-    await fixCICommand(args);
-    break;
-  case "status":
-    statusCommand(args);
-    break;
-  case "artifacts":
-    artifactsCommand(args);
-    break;
-  case "list":
-    listCommand(args);
-    break;
-  case "bootstrap":
-    await bootstrapCommand(args);
-    break;
-  case "doctor":
-    doctorCommand(args);
-    break;
-  default:
-    await uiCommand(command ? [command, ...args] : args);
-    break;
+if (command === "project" && subcommand === "add") {
+  const { store } = createService();
+  try {
+    const repoRoot = detectRepoRoot();
+    const repoFullName = detectRepoFullName();
+    const project = store.upsertProject({
+      id: repoFullName,
+      name: argValue(args, "--name") ?? (repoFullName.split("/")[1] ?? repoFullName),
+      repoRoot: argValue(args, "--repo-root") ?? repoRoot,
+      repoFullName,
+      workflowConfigPath: join(repoRoot, "WORKFLOW.md"),
+      allowedExecutors: ["devagent", "codex", "claude", "opencode"],
+    });
+    console.log(JSON.stringify(project, null, 2));
+  } finally {
+    store.close();
+  }
+  process.exit(0);
 }
+
+if (command === "issue" && subcommand === "sync") {
+  const { store, service } = createService();
+  try {
+    const items = await service.syncIssues();
+    console.log(JSON.stringify(items, null, 2));
+  } finally {
+    store.close();
+  }
+  process.exit(0);
+}
+
+if (command === "run" && subcommand === "start") {
+  const issueNumber = argValue(args, "--issue");
+  if (!issueNumber) {
+    throw new Error("Usage: devagent-hub run start --issue <number>");
+  }
+  const { store, service } = createService();
+  try {
+    const workflow = await service.start(issueNumber);
+    console.log(JSON.stringify(workflow, null, 2));
+  } finally {
+    store.close();
+  }
+  process.exit(0);
+}
+
+if (command === "run" && subcommand === "resume") {
+  const workflowId = args[0];
+  if (!workflowId) {
+    throw new Error("Usage: devagent-hub run resume <id>");
+  }
+  const { store, service } = createService();
+  try {
+    const workflow = await service.resume(workflowId);
+    console.log(JSON.stringify(workflow, null, 2));
+  } finally {
+    store.close();
+  }
+  process.exit(0);
+}
+
+if (command === "run" && subcommand === "cancel") {
+  const workflowId = args[0];
+  if (!workflowId) {
+    throw new Error("Usage: devagent-hub run cancel <id>");
+  }
+  const { store, service } = createService();
+  try {
+    const workflow = await service.cancel(workflowId);
+    console.log(JSON.stringify(workflow, null, 2));
+  } finally {
+    store.close();
+  }
+  process.exit(0);
+}
+
+if (command === "pr" && subcommand === "open") {
+  const workflowId = args[0];
+  if (!workflowId) {
+    throw new Error("Usage: devagent-hub pr open <id>");
+  }
+  const { store, service } = createService();
+  try {
+    const workflow = await service.openPr(workflowId);
+    console.log(JSON.stringify(workflow, null, 2));
+  } finally {
+    store.close();
+  }
+  process.exit(0);
+}
+
+if (command === "list") {
+  const { store, service } = createService();
+  try {
+    console.log(JSON.stringify(service.listWorkflows(), null, 2));
+  } finally {
+    store.close();
+  }
+  process.exit(0);
+}
+
+if (command === "status") {
+  const workflowId = subcommand;
+  if (!workflowId) {
+    throw new Error("Usage: devagent-hub status <id>");
+  }
+  const { store, service } = createService();
+  try {
+    console.log(JSON.stringify(service.getSnapshot(workflowId), null, 2));
+  } finally {
+    store.close();
+  }
+  process.exit(0);
+}
+
+throw new Error(`Unknown command: ${[command, subcommand].filter(Boolean).join(" ")}`);
