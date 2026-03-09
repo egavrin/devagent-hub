@@ -227,11 +227,11 @@ describe("RunCard render", () => {
     expect(lastFrame()!).toContain("Rate limit exceeded");
   });
 
-  it("shows agent profile tag", () => {
+  it("shows human-readable status", () => {
     const { lastFrame } = render(
-      <RunCard run={makeRun({ agentProfile: "fast" })} isSelected={false} isActive={false} />,
+      <RunCard run={makeRun({ status: "plan_draft" })} isSelected={false} isActive={false} />,
     );
-    expect(lastFrame()!).toContain("fast");
+    expect(lastFrame()!).toContain("plan ready");
   });
 
   it("renders different statuses", () => {
