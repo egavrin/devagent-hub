@@ -1,6 +1,5 @@
 import React, { useReducer, useCallback, useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useStdout } from "ink";
-import TextInput from "ink-text-input";
 import type { StateStore } from "../state/store.js";
 import type { ProcessRegistry } from "../runner/process-registry.js";
 import type { WorkflowOrchestrator } from "../workflow/orchestrator.js";
@@ -11,31 +10,17 @@ import { useWorkflowRuns } from "./hooks/use-workflow-runs.js";
 import { useEventLog } from "./hooks/use-event-log.js";
 import { useProcessOutput } from "./hooks/use-process-output.js";
 import { useKeybindings } from "./hooks/use-keybindings.js";
-import { KanbanBoard, KANBAN_COLUMNS, OPERATOR_BUCKETS } from "./components/kanban-board.js";
+import { OPERATOR_BUCKETS } from "./components/kanban-board.js";
 import { InputBar } from "./components/input-bar.js";
-import { ArtifactPane } from "./components/artifact-pane.js";
-import { TimelinePane } from "./components/timeline-pane.js";
-import { LogPane } from "./components/log-pane.js";
 import { ContextFooter } from "./components/context-footer.js";
-import { NewRunDialog } from "./components/new-run-dialog.js";
-import { ReworkDialog } from "./components/rework-dialog.js";
-import { ApprovalQueueView, resolveInboxItem } from "./components/approval-queue-view.js";
+import { resolveInboxItem } from "./components/approval-queue-view.js";
 import type { ApprovalQueueItem } from "./components/approval-queue-view.js";
-import { AutopilotBar } from "./components/autopilot-bar.js";
-import { RunnersView } from "./components/runners-view.js";
 import type { RunnerInfo } from "./components/runners-view.js";
-import { AutopilotView } from "./components/autopilot-view.js";
-import { RerunDialog } from "./components/rerun-dialog.js";
-import { SettingsView } from "./components/settings-view.js";
-import { CommandPalette } from "./components/command-palette.js";
-import { HelpDialog } from "./components/help-dialog.js";
-import { SummaryBar } from "./components/summary-bar.js";
-import { DetailTabBar } from "./components/detail-tab-bar.js";
-import { SummaryTab } from "./components/summary-tab.js";
-import { toOperatorStatus } from "./status-map.js";
+import { ScreenRouter } from "./components/screen-router.js";
+import { DialogLayer } from "./components/dialog-layer.js";
 import { useActions } from "./hooks/use-actions.js";
 import { uiReducer, initialUIState } from "./state.js";
-import type { FocusPane, LogMode, GateStrictness, RunPriority, DetailTab } from "./state.js";
+import type { DetailTab } from "./state.js";
 
 interface AppProps {
   store: StateStore;
@@ -858,215 +843,93 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
 
   // ─── Render ──────────────────────────────────────────────────
 
+  const logEvents = logEntries.map((e) => ({
+    timestamp: e.timestamp,
+    type: "output" as const,
+    summary: e.text,
+  }));
+
   return (
     <Box flexDirection="column" width={termWidth} height={termHeight}>
-      {/* ── Run Focus screen ──────────────────────────────── */}
-      {ui.screen === "run" && selectedRun ? (
-        <>
-          {/* Tab bar */}
-          <DetailTabBar
-            activeTab={ui.detailTab}
-            onSelect={(tab) => dispatch({ type: "SET_DETAIL_TAB", tab })}
-          />
+      <ScreenRouter
+        screen={ui.screen}
+        termHeight={termHeight}
+        runs={runs}
+        filteredRuns={filteredRuns}
+        selectedRunId={ui.selectedRunId}
+        activeProcessId={activeProcessId}
+        focusedColumnIndex={ui.focusedColumnIndex}
+        autopilotRunning={autopilotRunning}
+        autopilotStats={autopilotStats}
+        registry={registry}
+        config={config}
+        filterActive={ui.filterActive}
+        filterQuery={ui.filterQuery}
+        onFilterChange={(v) => dispatch({ type: "SET_FILTER", query: v })}
+        store={store}
+        selectedRun={selectedRun}
+        agentRuns={agentRuns}
+        artifacts={artifacts}
+        transitions={transitions}
+        approvals={approvals}
+        detailTab={ui.detailTab}
+        onSelectDetailTab={(tab) => dispatch({ type: "SET_DETAIL_TAB", tab })}
+        logMode={ui.logMode}
+        logEvents={logEvents}
+        outputLines={outputLines}
+        showArtifactDiff={ui.showArtifactDiff}
+        jumpTarget={ui.jumpTarget}
+        scrollToAgentRunId={ui.scrollToAgentRunId}
+        onJumpToAgentRun={handleJumpToAgentRun}
+        approvalQueueItems={approvalQueueItems}
+        planRevisionRuns={planRevisionRuns}
+        escalatedRuns={escalatedRuns}
+        failedRuns={failedRuns}
+        awaitingReviewRuns={awaitingReviewRuns}
+        readyToMergeRuns={readyToMergeRuns}
+        approvalIndex={ui.approvalIndex}
+        runnerInfos={runnerInfos}
+        recentAgentRuns={store.getRecentAgentRuns()}
+      />
 
-          {/* Tab content — fullscreen */}
-          <Box flexGrow={1} flexDirection="column" overflow="hidden">
-            {ui.detailTab === "summary" ? (
-              <SummaryTab
-                run={selectedRun}
-                artifacts={artifacts}
-                transitions={transitions}
-                agentRuns={agentRuns}
-                approvals={approvals}
-                isActive={!!activeProcessId}
-                height={termHeight - 6}
-              />
-            ) : ui.detailTab === "timeline" ? (
-              <TimelinePane
-                agentRuns={agentRuns}
-                transitions={transitions}
-                artifacts={artifacts}
-                isFocused={true}
-                height={termHeight - 6}
-                jumpTarget={ui.jumpTarget}
-                scrollToAgentRunId={ui.scrollToAgentRunId}
-              />
-            ) : ui.detailTab === "artifacts" ? (
-              <ArtifactPane
-                artifacts={artifacts}
-                approvals={approvals}
-                agentRuns={agentRuns}
-                isFocused={true}
-                height={termHeight - 6}
-                showDiff={ui.showArtifactDiff}
-                onJumpToAgentRun={handleJumpToAgentRun}
-              />
-            ) : (
-              <LogPane
-                selectedRun={selectedRun}
-                logMode={ui.logMode}
-                events={logEntries.map((e) => ({
-                  timestamp: e.timestamp,
-                  type: "output" as const,
-                  summary: e.text,
-                }))}
-                outputLines={outputLines}
-                isFocused={true}
-              />
-            )}
-          </Box>
-        </>
-      ) : ui.screen === "approvals" ? (
-        /* ── Approvals screen ─────────────────────────────── */
-        <ApprovalQueueView
-          items={approvalQueueItems}
-          planRevisionRuns={planRevisionRuns}
-          escalatedRuns={escalatedRuns}
-          failedRuns={failedRuns}
-          awaitingReviewRuns={awaitingReviewRuns}
-          readyToMergeRuns={readyToMergeRuns}
-          selectedIndex={ui.approvalIndex}
-          height={termHeight - 4}
-        />
-      ) : ui.screen === "runners" && config ? (
-        /* ── Runners screen ──────────────────────────────── */
-        <RunnersView config={config} runs={runs} agentRuns={store.getRecentAgentRuns()} runnerInfos={runnerInfos} height={termHeight - 4} />
-      ) : ui.screen === "autopilot" ? (
-        /* ── Autopilot screen ────────────────────────────── */
-        <AutopilotView
-          config={config}
-          runs={runs}
-          autopilotRunning={autopilotRunning}
-          stats={autopilotStats}
-          height={termHeight - 4}
-        />
-      ) : ui.screen === "settings" && config ? (
-        /* ── Settings screen ─────────────────────────────── */
-        <SettingsView config={config} height={termHeight - 4} />
-      ) : (
-        /* ── Dashboard screen ─────────────────────────────── */
-        <>
-          {/* Summary bar — one thin line with counts */}
-          <SummaryBar
-            mode={runs.length > 0 ? runs[0].mode : null}
-            runningCount={runs.filter(r => toOperatorStatus(r.status) === "Running").length}
-            needsActionCount={runs.filter(r => toOperatorStatus(r.status) === "Needs Action").length}
-            blockedCount={runs.filter(r => toOperatorStatus(r.status) === "Blocked").length}
-            failedCount={runs.filter(r => r.status === "failed").length}
-            doneCount={runs.filter(r => toOperatorStatus(r.status) === "Done").length}
-            totalCount={runs.length}
-            autopilotOn={autopilotRunning}
-            activeRunners={registry.list().length}
-          />
-          <AutopilotBar
-            running={autopilotRunning}
-            lastPoll={autopilotStats.lastPoll}
-            activeCount={autopilotStats.activeCount}
-            totalDispatched={autopilotStats.totalDispatched}
-            escalatedCount={runs.filter(r => r.status === "escalated").length}
-            maxEscalations={config?.budget.max_unresolved_escalations}
-            totalCostUsd={store.getRecentAgentRuns(1000).reduce((sum, ar) => sum + (ar.costUsd ?? 0), 0)}
-            sessionMaxCostUsd={config?.budget.session_max_cost_usd}
-          />
-          {ui.filterActive && (
-            <Box paddingLeft={1} flexShrink={0}>
-              <Text color="cyan">Filter: </Text>
-              <TextInput
-                value={ui.filterQuery}
-                onChange={(v: string) => dispatch({ type: "SET_FILTER", query: v })}
-                onSubmit={() => {}}
-              />
-              <Text dimColor>  [/ to close, type to filter]</Text>
-            </Box>
-          )}
-          <KanbanBoard
-            runs={filteredRuns}
-            selectedRunId={ui.selectedRunId}
-            activeRunId={activeProcessId}
-            focusedColumnIndex={ui.focusedColumnIndex}
-            isFocused={true}
-            compactMode={true}
-          />
-        </>
-      )}
+      <DialogLayer
+        dialog={ui.dialog}
+        termWidth={termWidth}
+        newRunForm={ui.newRunForm}
+        profiles={config ? Object.keys(config.profiles) : []}
+        runners={runnerBins}
+        onChangeSourceType={(t) => dispatch({ type: "SET_NEW_RUN_SOURCE_TYPE", sourceType: t })}
+        onChangeSourceId={(v) => dispatch({ type: "SET_NEW_RUN_SOURCE_ID", value: v })}
+        onChangeMode={(m) => dispatch({ type: "SET_NEW_RUN_MODE", mode: m })}
+        onChangeProfile={(p) => dispatch({ type: "SET_NEW_RUN_PROFILE", profile: p })}
+        onChangeRunner={(r) => dispatch({ type: "SET_NEW_RUN_RUNNER", runner: r })}
+        onChangeModel={(m) => dispatch({ type: "SET_NEW_RUN_MODEL", model: m })}
+        onChangeGateStrictness={(g) => dispatch({ type: "SET_NEW_RUN_GATE_STRICTNESS", gateStrictness: g })}
+        onChangePriority={(p) => dispatch({ type: "SET_NEW_RUN_PRIORITY", priority: p })}
+        onNewRunSubmit={handleNewRunSubmit}
+        selectedRun={selectedRun}
+        reworkNote={ui.reworkNote}
+        onChangeReworkNote={(v) => dispatch({ type: "SET_REWORK_NOTE", value: v })}
+        onReworkSubmit={handleReworkSubmit}
+        paletteActions={actionsResult.palette}
+        onPaletteSubmit={(actionId) => actionsResult.execute(actionId)}
+        config={config}
+        rerunProfileIndex={ui.rerunProfileIndex}
+        onRerunSubmit={handleRerunSubmit}
+        onClose={() => dispatch({ type: "CLOSE_DIALOG" })}
+      />
 
-      {/* ── Dialogs ───────────────────────────────────────── */}
-      {ui.dialog === "new-run" && (
-        <Box position="absolute" marginTop={5} marginLeft={Math.floor((termWidth - 52) / 2)}>
-          <NewRunDialog
-            form={ui.newRunForm}
-            profiles={config ? Object.keys(config.profiles) : []}
-            runners={runnerBins}
-            onChangeSourceType={(t) => dispatch({ type: "SET_NEW_RUN_SOURCE_TYPE", sourceType: t })}
-            onChangeSourceId={(v) => dispatch({ type: "SET_NEW_RUN_SOURCE_ID", value: v })}
-            onChangeMode={(m) => dispatch({ type: "SET_NEW_RUN_MODE", mode: m })}
-            onChangeProfile={(p) => dispatch({ type: "SET_NEW_RUN_PROFILE", profile: p })}
-            onChangeRunner={(r) => dispatch({ type: "SET_NEW_RUN_RUNNER", runner: r })}
-            onChangeModel={(m) => dispatch({ type: "SET_NEW_RUN_MODEL", model: m })}
-            onChangeGateStrictness={(g) => dispatch({ type: "SET_NEW_RUN_GATE_STRICTNESS", gateStrictness: g })}
-            onChangePriority={(p) => dispatch({ type: "SET_NEW_RUN_PRIORITY", priority: p })}
-            onSubmit={handleNewRunSubmit}
-            onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
-          />
-        </Box>
-      )}
-
-      {ui.dialog === "rework" && selectedRun && (
-        <Box position="absolute" marginTop={5} marginLeft={Math.floor((termWidth - 62) / 2)}>
-          <ReworkDialog
-            issueNumber={selectedRun.issueNumber}
-            note={ui.reworkNote}
-            onChangeNote={(v) => dispatch({ type: "SET_REWORK_NOTE", value: v })}
-            onSubmit={handleReworkSubmit}
-            onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
-          />
-        </Box>
-      )}
-
-      {ui.dialog === "command-palette" && (
-        <Box position="absolute" marginTop={5} marginLeft={Math.floor((termWidth - 52) / 2)}>
-          <CommandPalette
-            actions={actionsResult.palette}
-            onSubmit={(actionId) => {
-              dispatch({ type: "CLOSE_DIALOG" });
-              actionsResult.execute(actionId);
-            }}
-            onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
-          />
-        </Box>
-      )}
-
-      {ui.dialog === "help" && (
-        <Box position="absolute" marginTop={2} marginLeft={Math.floor((termWidth - 62) / 2)}>
-          <HelpDialog onClose={() => dispatch({ type: "CLOSE_DIALOG" })} />
-        </Box>
-      )}
-
-      {ui.dialog === "rerun" && config && (
-        <Box position="absolute" marginTop={5} marginLeft={Math.floor((termWidth - 52) / 2)}>
-          <RerunDialog
-            profiles={Object.keys(config.profiles)}
-            selectedIndex={ui.rerunProfileIndex}
-            onSelect={handleRerunSubmit}
-            onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
-          />
-        </Box>
-      )}
-
-      {/* ── Input bar ─────────────────────────────────────── */}
       <InputBar
         isActive={ui.inputMode && !isDialogOpen}
         onSubmit={handleSendInput}
       />
 
-      {/* ── Status message ────────────────────────────────── */}
       {ui.statusMessage && (
         <Box paddingLeft={1} flexShrink={0}>
           <Text color="yellow">{ui.statusMessage}</Text>
         </Box>
       )}
 
-      {/* ── Contextual footer ─────────────────────────────── */}
       <ContextFooter
         dialog={ui.dialog}
         inputMode={ui.inputMode}
