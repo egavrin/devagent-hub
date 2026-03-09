@@ -861,23 +861,22 @@ describe("NewRunDialog gate strictness and priority", () => {
 });
 
 describe("context footer rerun reviewer hint", () => {
-  it("shows rerun reviewer for awaiting_human_review on approvals screen", () => {
+  it("shows rerun for awaiting_human_review on approvals screen", () => {
     const { lastFrame } = render(
       <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="awaiting_human_review" />,
     );
-    expect(lastFrame()!).toContain("rerun review");
+    expect(lastFrame()!).toContain("rerun");
   });
 });
 
-describe("context footer jump hints on run screen", () => {
-  it("shows jump hints for run screen", () => {
+describe("context footer run screen hints", () => {
+  it("shows commands hint for run screen", () => {
     const { lastFrame } = render(
       <ContextFooter screen="run" dialog={null} inputMode={false} runStatus="implementing" hasActiveProcess={false} />,
     );
     const frame = lastFrame()!;
-    expect(frame).toContain("ga");
-    expect(frame).toContain("gg");
-    expect(frame).toContain("ge");
+    expect(frame).toContain("commands");
+    expect(frame).toContain("help");
   });
 });
 

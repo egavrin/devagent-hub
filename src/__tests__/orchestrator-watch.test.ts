@@ -243,13 +243,13 @@ describe("WorkflowOrchestrator — watch mode", () => {
   });
 
   it("budget exceeded stops workflow", async () => {
-    // Create orchestrator with very tight budget (0 minutes wall time)
+    // Create orchestrator with very tight budget (1 iteration max)
     const tightConfig = {
       ...defaultConfig(),
       mode: "watch" as const,
       budget: {
         ...defaultConfig().budget,
-        run_wall_time_minutes: 0, // immediately exceeded
+        run_max_iterations: 1, // exceeded after triage
       },
     };
     const tightOrchestrator = new WorkflowOrchestrator({
@@ -263,7 +263,7 @@ describe("WorkflowOrchestrator — watch mode", () => {
 
     const run = await tightOrchestrator.runWorkflow(208);
 
-    // Should be budget_exceeded since wall time is 0 minutes
+    // Should be budget_exceeded since max iterations (1) exceeded after triage + gate
     expect(run.status).toBe("budget_exceeded");
   });
 
