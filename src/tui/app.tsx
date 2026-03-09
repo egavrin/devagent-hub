@@ -28,7 +28,6 @@ import { AutopilotView } from "./components/autopilot-view.js";
 import { RerunDialog } from "./components/rerun-dialog.js";
 import { SettingsView } from "./components/settings-view.js";
 import { CommandPalette } from "./components/command-palette.js";
-import type { PaletteCommand } from "./components/command-palette.js";
 import { HelpDialog } from "./components/help-dialog.js";
 import { SummaryBar } from "./components/summary-bar.js";
 import { DetailTabBar } from "./components/detail-tab-bar.js";
@@ -999,10 +998,19 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
                 case "approve": handleApprove(); break;
                 case "rework": handleRework(); break;
                 case "retry": handleRetry(); break;
+                case "rerun": handleRerunWithProfile(); break;
                 case "kill": handleKill(); break;
                 case "pause": handlePause(); break;
                 case "continue": handleContinue(); break;
+                case "escalate": handleEscalate(); break;
+                case "delete": handleDelete(); break;
+                case "take-over": handleTakeOver(); break;
+                case "open-pr": handleOpenExternal(); break;
                 case "filter": dispatch({ type: "TOGGLE_FILTER" }); break;
+                case "approvals": dispatch({ type: "SET_SCREEN", screen: "approvals" }); break;
+                case "runners": dispatch({ type: "SET_SCREEN", screen: "runners" }); break;
+                case "autopilot": handleToggleAutopilot(); break;
+                case "settings": dispatch({ type: "SET_SCREEN", screen: "settings" }); break;
                 case "help": dispatch({ type: "OPEN_DIALOG", dialog: "help" }); break;
                 case "errors": dispatch({ type: "SET_LOG_MODE", mode: "errors" }); break;
               }
