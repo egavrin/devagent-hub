@@ -13,7 +13,27 @@ import { NewRunDialog } from "../tui/components/new-run-dialog.js";
 import { RunnersView } from "../tui/components/runners-view.js";
 import type { RunnerInfo } from "../tui/components/runners-view.js";
 import { defaultConfig } from "../workflow/config.js";
-import type { WorkflowRun, Artifact, AgentRun, StatusTransition, ApprovalRequest } from "../state/types.js";
+import { buildActions, getAvailableActions, getSuggestedAction } from "../tui/action-registry.js";
+import type { ActionContext } from "../tui/action-registry.js";
+import type { Screen } from "../tui/state.js";
+import type { WorkflowRun, WorkflowStatus, Artifact, AgentRun, StatusTransition, ApprovalRequest } from "../state/types.js";
+
+// Helper: build actions for ContextFooter tests
+const noop = () => {};
+const noopHandlers: Record<string, () => void> = {};
+const testActions = buildActions(noopHandlers);
+function actionsForCtx(screen: Screen, runStatus?: WorkflowStatus | null, extra?: Partial<ActionContext>) {
+  const ctx: ActionContext = {
+    screen,
+    runStatus: runStatus ?? null,
+    hasActiveProcess: extra?.hasActiveProcess ?? false,
+    hasSelectedRun: runStatus !== null && runStatus !== undefined,
+    hasConfig: true,
+    autopilotRunning: extra?.autopilotRunning ?? false,
+    hasPrUrl: extra?.hasPrUrl ?? false,
+  };
+  return { actions: getAvailableActions(testActions, ctx), suggested: getSuggestedAction(testActions, ctx) };
+}
 
 // ─── Test fixtures ──────────────────────────────────────────
 
@@ -248,106 +268,111 @@ describe("RunCard render", () => {
 
 describe("ContextFooter render", () => {
   it("renders dashboard hints", () => {
+    const ctx = actionsForCtx("dashboard");
     const { lastFrame } = render(
-      <ContextFooter screen="dashboard" dialog={null} inputMode={false} hasActiveProcess={false} />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
     const frame = lastFrame()!;
-    expect(frame).toContain("Enter");
-    expect(frame).toContain("open");
-    expect(frame).toContain("help");
+    expect(frame).toContain("New run");
+    expect(frame).toContain("Help");
   });
 
-  it("renders approval hints with plan_draft status", () => {
+  it("renders approve for plan_draft", () => {
+    const ctx = actionsForCtx("approvals", "plan_draft");
     const { lastFrame } = render(
-      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="plan_draft" />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
     const frame = lastFrame()!;
-    expect(frame).toContain("approve");
-    expect(frame).toContain("rework");
+    expect(frame).toContain("Approve");
+    expect(frame).toContain("Rework");
   });
 
-  it("renders approval hints for awaiting_human_review", () => {
+  it("renders approve for awaiting_human_review", () => {
+    const ctx = actionsForCtx("approvals", "awaiting_human_review");
     const { lastFrame } = render(
-      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="awaiting_human_review" />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
-    const frame = lastFrame()!;
-    expect(frame).toContain("approve");
-    expect(frame).toContain("rerun");
+    expect(lastFrame()!).toContain("Approve");
   });
 
-  it("renders approval hints for ready_to_merge", () => {
+  it("renders approve for ready_to_merge", () => {
+    const ctx = actionsForCtx("approvals", "ready_to_merge");
     const { lastFrame } = render(
-      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="ready_to_merge" />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
-    const frame = lastFrame()!;
-    expect(frame).toContain("done");
+    expect(lastFrame()!).toContain("Approve");
   });
 
-  it("renders approval hints for failed", () => {
+  it("renders retry for failed", () => {
+    const ctx = actionsForCtx("approvals", "failed");
     const { lastFrame } = render(
-      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="failed" />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
-    expect(lastFrame()!).toContain("retry");
+    expect(lastFrame()!).toContain("Retry");
   });
 
-  it("renders approval hints for escalated", () => {
+  it("renders take over for escalated", () => {
+    const ctx = actionsForCtx("approvals", "escalated");
     const { lastFrame } = render(
-      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="escalated" />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
-    expect(lastFrame()!).toContain("take-over");
+    expect(lastFrame()!).toContain("Take over");
   });
 
-  it("renders run hints with approve for plan_draft", () => {
+  it("shows suggested approve for plan_draft on run screen", () => {
+    const ctx = actionsForCtx("run", "plan_draft");
     const { lastFrame } = render(
-      <ContextFooter screen="run" dialog={null} inputMode={false} runStatus="plan_draft" hasActiveProcess={false} />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
-    const frame = lastFrame()!;
-    expect(frame).toContain("Approve plan");
+    expect(lastFrame()!).toContain("Approve");
   });
 
-  it("shows retry for failed runs", () => {
+  it("shows retry for failed on run screen", () => {
+    const ctx = actionsForCtx("run", "failed");
     const { lastFrame } = render(
-      <ContextFooter screen="run" dialog={null} inputMode={false} runStatus="failed" hasActiveProcess={false} />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
-    expect(lastFrame()!).toContain("R");
     expect(lastFrame()!).toContain("Retry");
   });
 
   it("shows kill when process active", () => {
+    const ctx = actionsForCtx("run", "implementing", { hasActiveProcess: true });
     const { lastFrame } = render(
-      <ContextFooter screen="run" dialog={null} inputMode={false} runStatus="implementing" hasActiveProcess={true} />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
-    expect(lastFrame()!).toContain("K");
+    expect(lastFrame()!).toContain("Kill");
   });
 
   it("hides when dialog open", () => {
+    const ctx = actionsForCtx("dashboard");
     const { lastFrame } = render(
-      <ContextFooter screen="dashboard" dialog="new-run" inputMode={false} hasActiveProcess={false} />,
+      <ContextFooter dialog="new-run" inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
     expect(lastFrame()!).toBe("");
   });
 
   it("hides when input mode", () => {
+    const ctx = actionsForCtx("dashboard");
     const { lastFrame } = render(
-      <ContextFooter screen="dashboard" dialog={null} inputMode={true} hasActiveProcess={false} />,
+      <ContextFooter dialog={null} inputMode={true} actions={ctx.actions} suggested={ctx.suggested} />,
     );
     expect(lastFrame()!).toBe("");
   });
 
-  it("shows commands hint on dashboard", () => {
+  it("shows commands on dashboard", () => {
+    const ctx = actionsForCtx("dashboard");
     const { lastFrame } = render(
-      <ContextFooter screen="dashboard" dialog={null} inputMode={false} hasActiveProcess={false} autopilotRunning={false} />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
-    expect(lastFrame()!).toContain("commands");
+    expect(lastFrame()!).toContain("Commands");
   });
 
-  it("shows search hint on dashboard", () => {
+  it("shows filter on dashboard", () => {
+    const ctx = actionsForCtx("dashboard");
     const { lastFrame } = render(
-      <ContextFooter screen="dashboard" dialog={null} inputMode={false} hasActiveProcess={false} autopilotRunning={true} />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
-    const frame = lastFrame()!;
-    expect(frame).toContain("/");
-    expect(frame).toContain("search");
+    expect(lastFrame()!).toContain("Filter");
   });
 });
 
@@ -861,22 +886,23 @@ describe("NewRunDialog gate strictness and priority", () => {
 });
 
 describe("context footer rerun reviewer hint", () => {
-  it("shows rerun for awaiting_human_review on approvals screen", () => {
+  it("shows retry for awaiting_human_review on approvals screen", () => {
+    const ctx = actionsForCtx("approvals", "awaiting_human_review");
     const { lastFrame } = render(
-      <ContextFooter screen="approvals" dialog={null} inputMode={false} hasActiveProcess={false} runStatus="awaiting_human_review" />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
-    expect(lastFrame()!).toContain("rerun");
+    expect(lastFrame()!).toContain("Retry");
   });
 });
 
 describe("context footer run screen hints", () => {
-  it("shows commands hint for run screen", () => {
+  it("shows help hint for run screen", () => {
+    const ctx = actionsForCtx("run", "implementing");
     const { lastFrame } = render(
-      <ContextFooter screen="run" dialog={null} inputMode={false} runStatus="implementing" hasActiveProcess={false} />,
+      <ContextFooter dialog={null} inputMode={false} actions={ctx.actions} suggested={ctx.suggested} />,
     );
     const frame = lastFrame()!;
-    expect(frame).toContain("commands");
-    expect(frame).toContain("help");
+    expect(frame).toContain("Help");
   });
 });
 

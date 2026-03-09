@@ -33,6 +33,7 @@ import { SummaryBar } from "./components/summary-bar.js";
 import { DetailTabBar } from "./components/detail-tab-bar.js";
 import { SummaryTab } from "./components/summary-tab.js";
 import { toOperatorStatus } from "./status-map.js";
+import { useActions } from "./hooks/use-actions.js";
 import { uiReducer, initialUIState } from "./state.js";
 import type { FocusPane, LogMode, GateStrictness, RunPriority, DetailTab } from "./state.js";
 
@@ -749,6 +750,39 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
     dispatch({ type: "JUMP_TO_AGENT_RUN", agentRunId });
   }, []);
 
+  // ─── Action registry ──────────────────────────────────────────
+
+  const actionHandlers = React.useMemo(() => ({
+    approve: handleApprove,
+    continue: handleContinue,
+    rework: handleRework,
+    retry: handleRetry,
+    rerun: handleRerunWithProfile,
+    kill: handleKill,
+    pause: handlePause,
+    escalate: handleEscalate,
+    delete: handleDelete,
+    "take-over": handleTakeOver,
+    "open-pr": handleOpenExternal,
+    "new-run": handleNewRun,
+    approvals: handleApprovalsView,
+    runners: () => dispatch({ type: "SET_SCREEN", screen: "runners" }),
+    autopilot: handleToggleAutopilot,
+    settings: () => dispatch({ type: "SET_SCREEN", screen: "settings" }),
+    filter: () => dispatch({ type: "TOGGLE_FILTER" }),
+    help: () => dispatch({ type: "OPEN_DIALOG", dialog: "help" }),
+    "command-palette": () => dispatch({ type: "OPEN_DIALOG", dialog: "command-palette" }),
+  }), [handleApprove, handleContinue, handleRework, handleRetry, handleRerunWithProfile, handleKill, handlePause, handleEscalate, handleDelete, handleTakeOver, handleOpenExternal, handleNewRun, handleApprovalsView, handleToggleAutopilot]);
+
+  const actionsResult = useActions({
+    screen: ui.screen,
+    selectedRun,
+    hasActiveProcess: !!activeProcessId,
+    hasConfig: !!config,
+    autopilotRunning,
+    handlers: actionHandlers,
+  });
+
   // ─── Keybindings ─────────────────────────────────────────────
 
   const isDialogOpen = ui.dialog !== null;
@@ -992,28 +1026,10 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
       {ui.dialog === "command-palette" && (
         <Box position="absolute" marginTop={5} marginLeft={Math.floor((termWidth - 52) / 2)}>
           <CommandPalette
-            onSubmit={(command) => {
+            actions={actionsResult.palette}
+            onSubmit={(actionId) => {
               dispatch({ type: "CLOSE_DIALOG" });
-              switch (command) {
-                case "approve": handleApprove(); break;
-                case "rework": handleRework(); break;
-                case "retry": handleRetry(); break;
-                case "rerun": handleRerunWithProfile(); break;
-                case "kill": handleKill(); break;
-                case "pause": handlePause(); break;
-                case "continue": handleContinue(); break;
-                case "escalate": handleEscalate(); break;
-                case "delete": handleDelete(); break;
-                case "take-over": handleTakeOver(); break;
-                case "open-pr": handleOpenExternal(); break;
-                case "filter": dispatch({ type: "TOGGLE_FILTER" }); break;
-                case "approvals": dispatch({ type: "SET_SCREEN", screen: "approvals" }); break;
-                case "runners": dispatch({ type: "SET_SCREEN", screen: "runners" }); break;
-                case "autopilot": handleToggleAutopilot(); break;
-                case "settings": dispatch({ type: "SET_SCREEN", screen: "settings" }); break;
-                case "help": dispatch({ type: "OPEN_DIALOG", dialog: "help" }); break;
-                case "errors": dispatch({ type: "SET_LOG_MODE", mode: "errors" }); break;
-              }
+              actionsResult.execute(actionId);
             }}
             onCancel={() => dispatch({ type: "CLOSE_DIALOG" })}
           />
@@ -1052,12 +1068,10 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
 
       {/* ── Contextual footer ─────────────────────────────── */}
       <ContextFooter
-        screen={ui.screen}
         dialog={ui.dialog}
         inputMode={ui.inputMode}
-        runStatus={selectedRun?.status}
-        hasActiveProcess={!!activeProcessId}
-        autopilotRunning={autopilotRunning}
+        actions={actionsResult.available}
+        suggested={actionsResult.suggested}
       />
     </Box>
   );
