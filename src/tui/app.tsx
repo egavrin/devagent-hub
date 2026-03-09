@@ -13,7 +13,6 @@ import { useProcessOutput } from "./hooks/use-process-output.js";
 import { useKeybindings } from "./hooks/use-keybindings.js";
 import { KanbanBoard, KANBAN_COLUMNS, OPERATOR_BUCKETS } from "./components/kanban-board.js";
 import { InputBar } from "./components/input-bar.js";
-import { RunHeader } from "./components/run-header.js";
 import { ArtifactPane } from "./components/artifact-pane.js";
 import { TimelinePane } from "./components/timeline-pane.js";
 import { LogPane } from "./components/log-pane.js";
@@ -22,7 +21,6 @@ import { NewRunDialog } from "./components/new-run-dialog.js";
 import { ReworkDialog } from "./components/rework-dialog.js";
 import { ApprovalQueueView, resolveInboxItem } from "./components/approval-queue-view.js";
 import type { ApprovalQueueItem } from "./components/approval-queue-view.js";
-import { WhyPausedPanel } from "./components/why-paused-panel.js";
 import { AutopilotBar } from "./components/autopilot-bar.js";
 import { RunnersView } from "./components/runners-view.js";
 import type { RunnerInfo } from "./components/runners-view.js";
@@ -132,9 +130,6 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
   const approvals: ApprovalRequest[] = selectedRun
     ? store.getApprovalsByWorkflow(selectedRun.id)
     : [];
-
-  // Gate verdicts for header chain (M3)
-  const gateVerdicts = artifacts.filter((a) => a.type === "gate_verdict");
 
   // Approval queue data
   const allPendingApprovals = store.listPendingApprovals();
@@ -829,8 +824,6 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
   }, ui.screen, ui.inputMode || isDialogOpen);
 
   // ─── Render ──────────────────────────────────────────────────
-
-  const paneHeight = Math.max(8, Math.floor((termHeight - 10) / 2));
 
   return (
     <Box flexDirection="column" width={termWidth} height={termHeight}>
