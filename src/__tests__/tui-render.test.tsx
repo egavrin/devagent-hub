@@ -334,20 +334,20 @@ describe("ContextFooter render", () => {
     expect(lastFrame()!).toBe("");
   });
 
-  it("shows autopilot hint on dashboard", () => {
+  it("shows commands hint on dashboard", () => {
     const { lastFrame } = render(
       <ContextFooter screen="dashboard" dialog={null} inputMode={false} hasActiveProcess={false} autopilotRunning={false} />,
     );
-    expect(lastFrame()!).toContain("autopilot");
+    expect(lastFrame()!).toContain("commands");
   });
 
-  it("shows stop autopilot when running", () => {
+  it("shows search hint on dashboard", () => {
     const { lastFrame } = render(
       <ContextFooter screen="dashboard" dialog={null} inputMode={false} hasActiveProcess={false} autopilotRunning={true} />,
     );
     const frame = lastFrame()!;
-    expect(frame).toContain("stop");
-    expect(frame).toContain("X");
+    expect(frame).toContain("/");
+    expect(frame).toContain("search");
   });
 });
 
