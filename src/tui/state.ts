@@ -2,6 +2,8 @@ export type Screen = "dashboard" | "run" | "approvals" | "runners" | "autopilot"
 
 export type FocusPane = "queue" | "artifact" | "timeline" | "logs";
 
+export type DetailTab = "summary" | "timeline" | "artifacts" | "logs";
+
 export type LogMode = "structured" | "raw" | "errors";
 
 export type Dialog = null | "new-run" | "rework" | "command-palette" | "help" | "rerun";
@@ -44,6 +46,7 @@ export interface UIState {
   rerunProfileIndex: number;
   jumpTarget: JumpTarget | null;
   scrollToAgentRunId: string | null;
+  detailTab: DetailTab;
 }
 
 export type UIAction =
@@ -77,9 +80,13 @@ export type UIAction =
   | { type: "SET_FILTER"; query: string }
   | { type: "TOGGLE_FILTER" }
   | { type: "SET_RERUN_INDEX"; index: number }
+  | { type: "SET_DETAIL_TAB"; tab: DetailTab }
+  | { type: "NEXT_DETAIL_TAB" }
+  | { type: "PREV_DETAIL_TAB" }
   | { type: "BACK" };
 
 const PANE_ORDER: FocusPane[] = ["queue", "artifact", "timeline", "logs"];
+const DETAIL_TAB_ORDER: DetailTab[] = ["summary", "timeline", "artifacts", "logs"];
 
 export const initialUIState: UIState = {
   screen: "approvals",
@@ -100,6 +107,7 @@ export const initialUIState: UIState = {
   rerunProfileIndex: 0,
   jumpTarget: null,
   scrollToAgentRunId: null,
+  detailTab: "summary",
 };
 
 export function uiReducer(state: UIState, action: UIAction): UIState {
@@ -209,12 +217,26 @@ export function uiReducer(state: UIState, action: UIAction): UIState {
         ? { ...state, filterActive: false, filterQuery: "" }
         : { ...state, filterActive: true };
 
+    case "SET_DETAIL_TAB":
+      return { ...state, detailTab: action.tab };
+
+    case "NEXT_DETAIL_TAB": {
+      const dtIdx = DETAIL_TAB_ORDER.indexOf(state.detailTab);
+      return { ...state, detailTab: DETAIL_TAB_ORDER[(dtIdx + 1) % DETAIL_TAB_ORDER.length] };
+    }
+
+    case "PREV_DETAIL_TAB": {
+      const dtIdx = DETAIL_TAB_ORDER.indexOf(state.detailTab);
+      return { ...state, detailTab: DETAIL_TAB_ORDER[(dtIdx - 1 + DETAIL_TAB_ORDER.length) % DETAIL_TAB_ORDER.length] };
+    }
+
     case "OPEN_RUN":
       return {
         ...state,
         screen: "run",
         selectedRunId: action.runId,
         focusedPane: "artifact",
+        detailTab: "summary",
         dialog: null,
         showArtifactDiff: false,
       };

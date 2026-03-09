@@ -7,6 +7,8 @@ export interface KeybindingActions {
   onSelect: () => void;
   onNextPane: () => void;
   onPrevPane: () => void;
+  onNextDetailTab: () => void;
+  onPrevDetailTab: () => void;
   onSetLogMode: (mode: "structured" | "raw" | "errors") => void;
   onApprove: () => void;
   onContinue: () => void;
@@ -30,7 +32,7 @@ export interface KeybindingActions {
   onFilter: () => void;
   onCommandPalette: () => void;
   onHelp: () => void;
-  onPaneShortcut: (index: number) => void;
+  onDetailTabShortcut: (index: number) => void;
   onGoTop: () => void;
   onGoBottom: () => void;
   onEscalate: () => void;
@@ -68,9 +70,14 @@ export function useKeybindings(
 
     if (key.return) actions.onSelect();
 
-    // Pane switching
-    if (key.tab && !key.shift) actions.onNextPane();
-    if (key.tab && key.shift) actions.onPrevPane();
+    // Pane / tab switching
+    if (screen === "run") {
+      if (key.tab && !key.shift) actions.onNextDetailTab();
+      if (key.tab && key.shift) actions.onPrevDetailTab();
+    } else {
+      if (key.tab && !key.shift) actions.onNextPane();
+      if (key.tab && key.shift) actions.onPrevPane();
+    }
 
     // Log modes
     if (input === "S") actions.onSetLogMode("structured");
@@ -101,19 +108,18 @@ export function useKeybindings(
     // Filter (/ key)
     if (input === "/") actions.onFilter();
 
-    // Command palette (: key) — only when not in inputMode (already guarded above)
-    if (input === ":") actions.onCommandPalette();
+    // Command palette (: or . key)
+    if (input === ":" || input === ".") actions.onCommandPalette();
 
     // Help (? key)
     if (input === "?") actions.onHelp();
 
-    // Pane shortcuts (1-5) — only on run screen
+    // Detail tab shortcuts (1-4) — only on run screen
     if (screen === "run") {
-      if (input === "1") actions.onPaneShortcut(0);
-      if (input === "2") actions.onPaneShortcut(1);
-      if (input === "3") actions.onPaneShortcut(2);
-      if (input === "4") actions.onPaneShortcut(3);
-      if (input === "5") actions.onPaneShortcut(4);
+      if (input === "1") actions.onDetailTabShortcut(0);
+      if (input === "2") actions.onDetailTabShortcut(1);
+      if (input === "3") actions.onDetailTabShortcut(2);
+      if (input === "4") actions.onDetailTabShortcut(3);
     }
 
     // G → go to bottom

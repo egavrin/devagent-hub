@@ -33,9 +33,11 @@ import { CommandPalette } from "./components/command-palette.js";
 import type { PaletteCommand } from "./components/command-palette.js";
 import { HelpDialog } from "./components/help-dialog.js";
 import { SummaryBar } from "./components/summary-bar.js";
+import { DetailTabBar } from "./components/detail-tab-bar.js";
+import { SummaryTab } from "./components/summary-tab.js";
 import { toOperatorStatus } from "./status-map.js";
 import { uiReducer, initialUIState } from "./state.js";
-import type { FocusPane, LogMode, GateStrictness, RunPriority } from "./state.js";
+import type { FocusPane, LogMode, GateStrictness, RunPriority, DetailTab } from "./state.js";
 
 interface AppProps {
   store: StateStore;
@@ -762,6 +764,8 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
     onSelect: isDialogOpen ? () => {} : handleSelect,
     onNextPane: () => dispatch({ type: "NEXT_PANE" }),
     onPrevPane: () => dispatch({ type: "PREV_PANE" }),
+    onNextDetailTab: () => dispatch({ type: "NEXT_DETAIL_TAB" }),
+    onPrevDetailTab: () => dispatch({ type: "PREV_DETAIL_TAB" }),
     onSetLogMode: (mode) => dispatch({ type: "SET_LOG_MODE", mode }),
     onApprove: isDialogOpen ? () => {} : handleApprove,
     onContinue: isDialogOpen ? () => {} : handleContinue,
@@ -791,19 +795,11 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
     onJumpArtifact: isDialogOpen ? () => {} : handleJumpArtifact,
     onJumpGate: isDialogOpen ? () => {} : handleJumpGate,
     onJumpError: isDialogOpen ? () => {} : handleJumpError,
-    onPaneShortcut: (index: number) => {
-      const paneMap: [FocusPane, LogMode | null][] = [
-        ["queue", null],
-        ["artifact", null],
-        ["timeline", null],
-        ["logs", "structured"],
-        ["logs", "raw"],
-      ];
-      const entry = paneMap[index];
-      if (!entry) return;
-      dispatch({ type: "SET_FOCUSED_PANE", pane: entry[0] });
-      if (entry[1]) {
-        dispatch({ type: "SET_LOG_MODE", mode: entry[1] });
+    onDetailTabShortcut: (index: number) => {
+      const tabs: DetailTab[] = ["summary", "timeline", "artifacts", "logs"];
+      const tab = tabs[index];
+      if (tab) {
+        dispatch({ type: "SET_DETAIL_TAB", tab });
       }
     },
     onGoTop: () => {
@@ -841,50 +837,45 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
       {/* ── Run Focus screen ──────────────────────────────── */}
       {ui.screen === "run" && selectedRun ? (
         <>
-          <Box borderStyle="single" borderColor="blue" flexShrink={0}>
-            <RunHeader
-              run={selectedRun}
-              isActive={!!activeProcessId}
-              gateVerdicts={gateVerdicts}
-              latestAgentRun={agentRuns.length > 0 ? agentRuns[agentRuns.length - 1] : null}
-              agentRunCount={agentRuns.length}
-              totalCostUsd={agentRuns.reduce((sum, ar) => sum + (ar.costUsd ?? 0), 0)}
-              budgetConfig={config?.budget}
-            />
-          </Box>
-
-          {/* Why paused panel — only for blocked states */}
-          <WhyPausedPanel
-            run={selectedRun}
-            artifacts={artifacts}
-            transitions={transitions}
+          {/* Tab bar */}
+          <DetailTabBar
+            activeTab={ui.detailTab}
+            onSelect={(tab) => dispatch({ type: "SET_DETAIL_TAB", tab })}
           />
 
-          <Box flexGrow={1} flexDirection="row" overflow="hidden">
-            {/* Left: Artifact pane */}
-            <Box flexGrow={1} flexBasis={0} flexDirection="column">
-              <ArtifactPane
+          {/* Tab content — fullscreen */}
+          <Box flexGrow={1} flexDirection="column" overflow="hidden">
+            {ui.detailTab === "summary" ? (
+              <SummaryTab
+                run={selectedRun}
                 artifacts={artifacts}
-                approvals={approvals}
+                transitions={transitions}
                 agentRuns={agentRuns}
-                isFocused={ui.focusedPane === "artifact"}
-                height={paneHeight * 2}
-                showDiff={ui.showArtifactDiff}
-                onJumpToAgentRun={handleJumpToAgentRun}
+                approvals={approvals}
+                isActive={!!activeProcessId}
+                height={termHeight - 6}
               />
-            </Box>
-
-            {/* Right: Timeline + Logs stacked */}
-            <Box flexGrow={1} flexBasis={0} flexDirection="column">
+            ) : ui.detailTab === "timeline" ? (
               <TimelinePane
                 agentRuns={agentRuns}
                 transitions={transitions}
                 artifacts={artifacts}
-                isFocused={ui.focusedPane === "timeline"}
-                height={paneHeight}
+                isFocused={true}
+                height={termHeight - 6}
                 jumpTarget={ui.jumpTarget}
                 scrollToAgentRunId={ui.scrollToAgentRunId}
               />
+            ) : ui.detailTab === "artifacts" ? (
+              <ArtifactPane
+                artifacts={artifacts}
+                approvals={approvals}
+                agentRuns={agentRuns}
+                isFocused={true}
+                height={termHeight - 6}
+                showDiff={ui.showArtifactDiff}
+                onJumpToAgentRun={handleJumpToAgentRun}
+              />
+            ) : (
               <LogPane
                 selectedRun={selectedRun}
                 logMode={ui.logMode}
@@ -894,9 +885,9 @@ export function App({ store, registry, orchestrator, config, github, repo }: App
                   summary: e.text,
                 }))}
                 outputLines={outputLines}
-                isFocused={ui.focusedPane === "logs"}
+                isFocused={true}
               />
-            </Box>
+            )}
           </Box>
         </>
       ) : ui.screen === "approvals" ? (
