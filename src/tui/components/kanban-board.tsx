@@ -1,24 +1,9 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { WorkflowRun, WorkflowStatus } from "../../state/types.js";
+import type { WorkflowRun } from "../../state/types.js";
 import type { OperatorStatus } from "../status-map.js";
 import { toOperatorStatus, operatorStatusColor } from "../status-map.js";
 import { Column } from "./column.js";
-
-export interface ColumnDef {
-  title: string;
-  statuses: WorkflowStatus[];
-}
-
-/** Legacy column definitions — kept for navigation compatibility */
-export const KANBAN_COLUMNS: ColumnDef[] = [
-  { title: "Triage", statuses: ["new", "triaged"] },
-  { title: "Planning", statuses: ["plan_draft", "plan_revision", "plan_accepted"] },
-  { title: "Building", statuses: ["implementing", "awaiting_local_verify"] },
-  { title: "Review", statuses: ["draft_pr_opened", "auto_review_fix_loop", "awaiting_human_review"] },
-  { title: "Done", statuses: ["ready_to_merge", "done"] },
-  { title: "Blocked", statuses: ["escalated", "failed"] },
-];
 
 /** Operator bucket definitions */
 export interface BucketDef {
