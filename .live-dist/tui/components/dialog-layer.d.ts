@@ -1,0 +1,32 @@
+import type { WorkflowRun } from "../../state/types.js";
+import type { WorkflowConfig } from "../../workflow/config.js";
+import type { Dialog, NewRunForm, NewRunSourceType, NewRunMode, GateStrictness, RunPriority } from "../state.js";
+import type { Action } from "../action-registry.js";
+interface DialogLayerProps {
+    dialog: Dialog;
+    termWidth: number;
+    newRunForm: NewRunForm;
+    profiles: string[];
+    runners: string[];
+    onChangeSourceType: (t: NewRunSourceType) => void;
+    onChangeSourceId: (v: string) => void;
+    onChangeMode: (m: NewRunMode) => void;
+    onChangeProfile: (p: string) => void;
+    onChangeRunner: (r: string) => void;
+    onChangeModel: (m: string) => void;
+    onChangeGateStrictness: (g: GateStrictness) => void;
+    onChangePriority: (p: RunPriority) => void;
+    onNewRunSubmit: () => void;
+    selectedRun: WorkflowRun | null;
+    reworkNote: string;
+    onChangeReworkNote: (v: string) => void;
+    onReworkSubmit: () => void;
+    paletteActions: Action[];
+    onPaletteSubmit: (actionId: string) => void;
+    config: WorkflowConfig | undefined;
+    rerunProfileIndex: number;
+    onRerunSubmit: (profileName: string) => void;
+    onClose: () => void;
+}
+export declare function DialogLayer({ dialog, termWidth, newRunForm, profiles, runners, onChangeSourceType, onChangeSourceId, onChangeMode, onChangeProfile, onChangeRunner, onChangeModel, onChangeGateStrictness, onChangePriority, onNewRunSubmit, selectedRun, reworkNote, onChangeReworkNote, onReworkSubmit, paletteActions, onPaletteSubmit, config, rerunProfileIndex, onRerunSubmit, onClose, }: DialogLayerProps): import("react/jsx-runtime").JSX.Element | null;
+export {};

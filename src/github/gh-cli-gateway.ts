@@ -142,7 +142,7 @@ export class GhCliGateway implements GitHubGateway {
   ): Promise<GitHubIssue[]> {
     const labelParam = labels.join(",");
     const raw = gh([
-      "api", `repos/${repo}/issues`,
+      "api", "-X", "GET", `repos/${repo}/issues`,
       "-f", "state=open",
       "-f", `labels=${labelParam}`,
       "-f", "per_page=50",
