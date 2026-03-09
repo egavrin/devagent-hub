@@ -4,10 +4,13 @@ import TextInput from "ink-text-input";
 import type { WorkflowRun } from "../../state/types.js";
 import type { ProcessRegistry } from "../../runner/process-registry.js";
 import type { WorkflowConfig } from "../../workflow/config.js";
+import type { LayoutMode } from "../hooks/use-layout.js";
 import { KanbanBoard } from "./kanban-board.js";
+import { RunListView } from "./run-list-view.js";
 import { SummaryBar } from "./summary-bar.js";
 import { AutopilotBar } from "./autopilot-bar.js";
-import { toOperatorStatus } from "../status-map.js";
+import { RunCardPreview } from "./run-card-preview.js";
+import { toBoardSummaryViewModel } from "../view-models.js";
 
 interface DashboardScreenProps {
   runs: WorkflowRun[];
@@ -23,6 +26,8 @@ interface DashboardScreenProps {
   filterQuery: string;
   onFilterChange: (query: string) => void;
   store: { getRecentAgentRuns: (limit?: number) => { costUsd?: number | null }[] };
+  layoutMode: LayoutMode;
+  previewWidth: number;
 }
 
 export function DashboardScreen({
@@ -39,17 +44,22 @@ export function DashboardScreen({
   filterQuery,
   onFilterChange,
   store,
+  layoutMode,
+  previewWidth,
 }: DashboardScreenProps) {
+  const summary = toBoardSummaryViewModel(runs);
+  const selectedRun = selectedRunId ? filteredRuns.find((r) => r.id === selectedRunId) ?? null : null;
+
   return (
     <>
       <SummaryBar
-        mode={runs.length > 0 ? runs[0].mode : null}
-        runningCount={runs.filter(r => toOperatorStatus(r.status) === "Running").length}
-        needsActionCount={runs.filter(r => toOperatorStatus(r.status) === "Needs Action").length}
-        blockedCount={runs.filter(r => toOperatorStatus(r.status) === "Blocked").length}
-        failedCount={runs.filter(r => r.status === "failed").length}
-        doneCount={runs.filter(r => toOperatorStatus(r.status) === "Done").length}
-        totalCount={runs.length}
+        mode={summary.mode}
+        runningCount={summary.runningCount}
+        needsActionCount={summary.needsActionCount}
+        blockedCount={summary.blockedCount}
+        failedCount={summary.failedCount}
+        doneCount={summary.doneCount}
+        totalCount={summary.totalCount}
         autopilotOn={autopilotRunning}
         activeRunners={registry.list().length}
       />
@@ -74,14 +84,42 @@ export function DashboardScreen({
           <Text dimColor>  [/ to close, type to filter]</Text>
         </Box>
       )}
-      <KanbanBoard
-        runs={filteredRuns}
-        selectedRunId={selectedRunId}
-        activeRunId={activeProcessId}
-        focusedColumnIndex={focusedColumnIndex}
-        isFocused={true}
-        compactMode={true}
-      />
+
+      {layoutMode === "narrow" ? (
+        /* Narrow: single-column list */
+        <RunListView
+          runs={filteredRuns}
+          selectedRunId={selectedRunId}
+          activeRunId={activeProcessId}
+        />
+      ) : layoutMode === "wide" ? (
+        /* Wide: board + preview pane */
+        <Box flexDirection="row" width="100%">
+          <Box flexGrow={1}>
+            <KanbanBoard
+              runs={filteredRuns}
+              selectedRunId={selectedRunId}
+              activeRunId={activeProcessId}
+              focusedColumnIndex={focusedColumnIndex}
+              isFocused={true}
+              compactMode={true}
+            />
+          </Box>
+          <Box width={previewWidth} flexShrink={0} borderStyle="single" borderColor="gray" flexDirection="column" paddingLeft={1}>
+            <RunCardPreview run={selectedRun} />
+          </Box>
+        </Box>
+      ) : (
+        /* Normal: compact board */
+        <KanbanBoard
+          runs={filteredRuns}
+          selectedRunId={selectedRunId}
+          activeRunId={activeProcessId}
+          focusedColumnIndex={focusedColumnIndex}
+          isFocused={true}
+          compactMode={true}
+        />
+      )}
     </>
   );
 }

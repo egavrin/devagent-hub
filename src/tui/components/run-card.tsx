@@ -1,62 +1,68 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { WorkflowRun } from "../../state/types.js";
-import { humanStatus, operatorStatusColor, toOperatorStatus, suggestedAction } from "../status-map.js";
+import type { RunCardViewModel } from "../view-models.js";
+import { toRunCardViewModel } from "../view-models.js";
+import type { LayoutMode } from "../hooks/use-layout.js";
 
 interface RunCardProps {
   run: WorkflowRun;
   isSelected: boolean;
   isActive: boolean;
+  layoutMode?: LayoutMode;
 }
 
-function formatAge(dateStr: string): string {
-  const ms = Date.now() - new Date(dateStr).getTime();
-  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
-  if (ms < 3600_000) return `${Math.floor(ms / 60_000)}m`;
-  if (ms < 86400_000) return `${Math.floor(ms / 3600_000)}h`;
-  return `${Math.floor(ms / 86400_000)}d`;
+export function RunCard({ run, isSelected, isActive, layoutMode = "normal" }: RunCardProps) {
+  const vm = toRunCardViewModel(run);
+
+  if (layoutMode === "narrow") {
+    return <NarrowRunCard vm={vm} isSelected={isSelected} isActive={isActive} />;
+  }
+
+  return <DefaultRunCard vm={vm} isSelected={isSelected} isActive={isActive} />;
 }
 
-export function RunCard({ run, isSelected, isActive }: RunCardProps) {
-  const title = (run.metadata as Record<string, unknown>)?.title as string | undefined;
-  const titleShort = title ? (title.length > 22 ? title.slice(0, 21) + "\u2026" : title) : "";
-  const age = formatAge(run.updatedAt);
-  const opStatus = toOperatorStatus(run.status);
-  const statusColor = operatorStatusColor(opStatus);
-  const action = suggestedAction(run.status);
+/** Compact single-line card for narrow terminals */
+function NarrowRunCard({ vm, isSelected, isActive }: { vm: RunCardViewModel; isSelected: boolean; isActive: boolean }) {
+  return (
+    <Box paddingLeft={1}>
+      <Text bold={isSelected} inverse={isSelected} color={isSelected ? "blue" : undefined}>
+        {isActive ? <Text color="green">*</Text> : " "}
+        #{vm.issueNumber} <Text color={vm.statusColor}>{vm.humanStatus}</Text> {vm.title.length > 20 ? vm.title.slice(0, 19) + "\u2026" : vm.title} {vm.age}
+      </Text>
+    </Box>
+  );
+}
 
-  // Line 1: ID + title
-  // Line 2: phase + human status + age
-  // Line 3: badges (PR, blocked, suggested action)
+/** Standard 3-line card for normal/wide terminals */
+function DefaultRunCard({ vm, isSelected, isActive }: { vm: RunCardViewModel; isSelected: boolean; isActive: boolean }) {
+  const titleShort = vm.title.length > 22 ? vm.title.slice(0, 21) + "\u2026" : vm.title;
+
   return (
     <Box flexDirection="column" paddingLeft={1}>
       {/* Line 1: ID + title */}
-      <Text
-        bold={isSelected}
-        inverse={isSelected}
-        color={isSelected ? "blue" : undefined}
-      >
+      <Text bold={isSelected} inverse={isSelected} color={isSelected ? "blue" : undefined}>
         {isActive ? <Text color="green">*</Text> : " "}
-        #{run.issueNumber} {titleShort}
+        #{vm.issueNumber} {titleShort}
       </Text>
       {/* Line 2: phase + human status + age */}
       <Text dimColor>
         {"  "}
-        {run.currentPhase ?? "-"}
-        <Text color={statusColor}> {humanStatus(run.status)}</Text>
-        {run.repairRound > 0 ? ` r${run.repairRound}` : ""}
+        {vm.phase}
+        <Text color={vm.statusColor}> {vm.humanStatus}</Text>
+        {vm.repairRound > 0 ? ` r${vm.repairRound}` : ""}
         {" "}
-        {age}
+        {vm.age}
       </Text>
       {/* Line 3: badges */}
       <Text dimColor>
         {"  "}
-        {run.prUrl ? <Text color="green">PR </Text> : null}
-        {run.blockedReason ? (
-          <Text color="red">! {run.blockedReason.length > 20 ? run.blockedReason.slice(0, 19) + "\u2026" : run.blockedReason} </Text>
+        {vm.hasPr ? <Text color="green">PR </Text> : null}
+        {vm.blockedReason ? (
+          <Text color="red">! {vm.blockedReason.length > 20 ? vm.blockedReason.slice(0, 19) + "\u2026" : vm.blockedReason} </Text>
         ) : null}
-        {isSelected && action ? (
-          <Text color="yellow">[{action.key}] {action.label}</Text>
+        {isSelected && vm.suggestedAction ? (
+          <Text color="yellow">[{vm.suggestedAction.key}] {vm.suggestedAction.label}</Text>
         ) : null}
       </Text>
     </Box>

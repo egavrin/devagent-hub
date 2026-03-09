@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { WorkflowRun } from "../../state/types.js";
+import type { LayoutMode } from "../hooks/use-layout.js";
 import { RunCard } from "./run-card.js";
 
 interface ColumnProps {
@@ -10,9 +11,10 @@ interface ColumnProps {
   activeRunId: string | null;
   isFocused: boolean;
   titleColor?: string;
+  layoutMode?: LayoutMode;
 }
 
-export function Column({ title, runs, selectedRunId, activeRunId, isFocused, titleColor }: ColumnProps) {
+export function Column({ title, runs, selectedRunId, activeRunId, isFocused, titleColor, layoutMode = "normal" }: ColumnProps) {
   return (
     <Box
       flexDirection="column"
@@ -29,6 +31,7 @@ export function Column({ title, runs, selectedRunId, activeRunId, isFocused, tit
           run={run}
           isSelected={run.id === selectedRunId}
           isActive={run.id === activeRunId}
+          layoutMode={layoutMode}
         />
       ))}
     </Box>

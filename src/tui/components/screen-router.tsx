@@ -4,6 +4,7 @@ import type { ProcessRegistry } from "../../runner/process-registry.js";
 import type { WorkflowConfig } from "../../workflow/config.js";
 import type { Screen, DetailTab, JumpTarget, LogMode } from "../state.js";
 import type { OutputLine } from "../hooks/use-process-output.js";
+import { useLayout } from "../hooks/use-layout.js";
 import type { ApprovalQueueItem } from "./approval-queue-view.js";
 import type { RunnerInfo } from "./runners-view.js";
 import { DashboardScreen } from "./dashboard-screen.js";
@@ -66,6 +67,7 @@ interface ScreenRouterProps {
 
 export function ScreenRouter(props: ScreenRouterProps) {
   const { screen, termHeight } = props;
+  const layout = useLayout();
 
   if (screen === "run" && props.selectedRun) {
     return (
@@ -151,6 +153,8 @@ export function ScreenRouter(props: ScreenRouterProps) {
       filterQuery={props.filterQuery}
       onFilterChange={props.onFilterChange}
       store={props.store}
+      layoutMode={layout.mode}
+      previewWidth={layout.previewWidth}
     />
   );
 }
