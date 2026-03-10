@@ -278,14 +278,22 @@ export class WorkflowService {
     if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
     this.assertWorkflowContinuationSafe(workflow);
     const pending = this.store.getPendingApproval(workflowId);
-    if (!pending || pending.stage !== "review") {
+    const snapshot = this.store.getWorkflowSnapshot(workflow.id);
+    const latestReviewApproval = [...snapshot.approvals].reverse().find((approval) => approval.stage === "review");
+    const canResumeApprovedOpen =
+      workflow.stage === "review" &&
+      workflow.status === "waiting_approval" &&
+      !workflow.prNumber &&
+      latestReviewApproval?.status === "approved";
+
+    if (pending?.stage === "review") {
+      this.store.updateApproval(pending.id, "approved", "Approved via pr open");
+    } else if (!canResumeApprovedOpen) {
       throw new Error("Workflow is not waiting on final approval");
     }
 
-    this.store.updateApproval(pending.id, "approved", "Approved via pr open");
-
     const workItem = this.getWorkItem(workflow.workItemId);
-    const attempts = this.store.getWorkflowSnapshot(workflow.id).attempts;
+    const attempts = snapshot.attempts;
     const latestAttempt = attempts.at(-1);
     if (!latestAttempt?.workspacePath) throw new Error("No workspace available for PR handoff");
     const branch = this.store.getWorkflowBranch(workflow.id);

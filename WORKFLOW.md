@@ -106,15 +106,15 @@ That is the live-validated path for end-to-end issue-to-PR runs through Hub.
 
 Hub exposes these operator actions on top of the staged workflow:
 
-- `run resume <workflow-id>`
+- `devagent-hub run resume <workflow-id>`
   - approves the pending plan
   - or continues after a manual oversize-change approval on `implement` or `repair`
-- `run reject <workflow-id> --note "..."`
+- `devagent-hub run reject <workflow-id> --note "..."`
   - if the workflow is waiting on `plan`, Hub reruns `plan` with the human note and pauses again
   - if the workflow is waiting on `review`, Hub runs `repair -> verify -> review` with the human note and pauses again
-- `pr open <workflow-id>`
+- `devagent-hub pr open <workflow-id>`
   - approves final handoff and opens the PR
-- `pr repair <workflow-id>`
+- `devagent-hub pr repair <workflow-id>`
   - fetches GitHub review comments plus failing CI logs for the opened PR
   - runs `repair -> verify -> review` on the same branch
   - pushes updates and resolves addressed review threads
@@ -127,8 +127,7 @@ When the workflow pauses on `plan`, use:
 devagent-hub status <workflow-id>
 ```
 
-`status` prints the latest artifact paths. Open the printed `plan.md` path directly, review it, then
-either:
+`status` prints the latest artifact paths. Open the printed `plan.md` path directly, review it, then either:
 
 ```bash
 devagent-hub run resume <workflow-id>
@@ -142,9 +141,15 @@ devagent-hub run reject <workflow-id> --note "expand rollback notes and split mi
 
 The rejection note becomes input to the next `plan`.
 
+When the workflow pauses before PR handoff, open the final approval gate with:
+
+```bash
+devagent-hub pr open <workflow-id>
+```
+
 ## Post-PR Feedback
 
-`pr repair` uses:
+`devagent-hub pr repair <workflow-id>` uses:
 
 - GitHub review comments
 - file and line context when GitHub provides it
