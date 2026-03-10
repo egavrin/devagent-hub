@@ -117,6 +117,206 @@ function deserializeBaselineSnapshot(raw: string): WorkflowBaselineSnapshot {
   return JSON.parse(raw) as WorkflowBaselineSnapshot;
 }
 
+type PragmaColumnRow = {
+  name: string;
+};
+
+type ProjectRow = {
+  id: string;
+  name: string;
+  repo_root: string;
+  repo_full_name: string;
+  workflow_config_path: string | null;
+  allowed_executors_json: string;
+};
+
+type WorkItemRow = {
+  id: string;
+  project_id: string;
+  kind: WorkItem["kind"];
+  external_id: string;
+  title: string;
+  state: WorkItem["state"];
+  labels_json: string;
+  url: string;
+};
+
+type WorkflowInstanceRow = {
+  id: string;
+  project_id: string;
+  work_item_id: string;
+  stage: WorkflowInstance["stage"];
+  status: WorkflowInstance["status"];
+  status_reason: string | null;
+  repair_round: number;
+  pr_number: number | null;
+  pr_url: string | null;
+  branch: string;
+  base_branch: string;
+  base_sha: string;
+  baseline_snapshot_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type WorkflowBranchRow = {
+  branch: string;
+};
+
+type TaskRow = {
+  id: string;
+  workflow_instance_id: string;
+  type: WorkflowTaskType;
+  status: Task["status"];
+  executor_id: string;
+  runner_id: string;
+  attempt_ids_json: string;
+};
+
+type ExecutionAttemptRow = {
+  id: string;
+  task_id: string;
+  executor_id: string;
+  runner_id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: ExecutionAttempt["status"];
+  result_path: string | null;
+  workspace_path: string | null;
+};
+
+type ApprovalRow = {
+  id: string;
+  workflow_instance_id: string;
+  stage: WorkflowTaskType;
+  status: Approval["status"];
+  note: string | null;
+};
+
+type TaskEventRow = {
+  id: number;
+  task_id: string;
+  event_json: string;
+  created_at: string;
+};
+
+type TaskArtifactRow = {
+  kind: ArtifactRef["kind"];
+  path: string;
+  mime_type: string | null;
+  created_at: string;
+};
+
+type TaskResultRow = {
+  task_id: string;
+  result_json: string;
+};
+
+function mapProjectRow(row: ProjectRow): Project {
+  return {
+    id: row.id,
+    name: row.name,
+    repoRoot: row.repo_root,
+    repoFullName: row.repo_full_name,
+    workflowConfigPath: row.workflow_config_path ?? undefined,
+    allowedExecutors: JSON.parse(row.allowed_executors_json) as Project["allowedExecutors"],
+  };
+}
+
+function mapWorkItemRow(row: WorkItemRow): WorkItem {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    kind: row.kind,
+    externalId: row.external_id,
+    title: row.title,
+    state: row.state,
+    labels: JSON.parse(row.labels_json) as string[],
+    url: row.url,
+  };
+}
+
+function mapWorkflowInstanceRow(row: WorkflowInstanceRow): WorkflowInstance {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    workItemId: row.work_item_id,
+    stage: row.stage,
+    status: row.status,
+    statusReason: row.status_reason ?? undefined,
+    repairRound: row.repair_round,
+    prNumber: row.pr_number ?? undefined,
+    prUrl: row.pr_url ?? undefined,
+    branch: row.branch,
+    baseBranch: row.base_branch,
+    baseSha: row.base_sha,
+    baselineSnapshot: deserializeBaselineSnapshot(row.baseline_snapshot_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapTaskRow(row: TaskRow): Task {
+  return {
+    id: row.id,
+    workflowInstanceId: row.workflow_instance_id,
+    type: row.type,
+    status: row.status,
+    executorId: row.executor_id,
+    runnerId: row.runner_id,
+    attemptIds: JSON.parse(row.attempt_ids_json) as string[],
+  };
+}
+
+function mapExecutionAttemptRow(row: ExecutionAttemptRow): ExecutionAttempt {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    executorId: row.executor_id,
+    runnerId: row.runner_id,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at ?? undefined,
+    status: row.status,
+    resultPath: row.result_path ?? undefined,
+    workspacePath: row.workspace_path ?? undefined,
+  };
+}
+
+function mapApprovalRow(row: ApprovalRow): Approval {
+  return {
+    id: row.id,
+    workflowInstanceId: row.workflow_instance_id,
+    stage: row.stage,
+    status: row.status,
+    note: row.note ?? undefined,
+  };
+}
+
+function mapTaskEventRow(row: TaskEventRow): PersistedTaskEvent {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    event: JSON.parse(row.event_json) as TaskExecutionEvent,
+    createdAt: row.created_at,
+  };
+}
+
+function mapTaskArtifactRow(row: TaskArtifactRow): ArtifactRef {
+  return {
+    kind: row.kind,
+    path: row.path,
+    mimeType: row.mime_type ?? undefined,
+    createdAt: row.created_at,
+  };
+}
+
+function mapTaskResultRow(row: TaskResultRow): PersistedTaskResult {
+  return {
+    taskId: row.task_id,
+    result: JSON.parse(row.result_json) as TaskExecutionResult,
+  };
+}
+
 export class CanonicalStore {
   private readonly db: Database.Database;
 
@@ -131,7 +331,7 @@ export class CanonicalStore {
   }
 
   private ensureWorkflowColumns(): void {
-    const columns = this.db.prepare("PRAGMA table_info(workflow_instances)").all() as Array<{ name: string }>;
+    const columns = this.db.prepare("PRAGMA table_info(workflow_instances)").all() as PragmaColumnRow[];
     const names = new Set(columns.map((column) => column.name));
     if (!names.has("status_reason")) {
       this.db.exec("ALTER TABLE workflow_instances ADD COLUMN status_reason TEXT");
@@ -191,26 +391,12 @@ export class CanonicalStore {
   }
 
   listProjects(): Project[] {
-    return this.db.prepare("SELECT * FROM projects ORDER BY name").all().map((row: any) => ({
-      id: row.id,
-      name: row.name,
-      repoRoot: row.repo_root,
-      repoFullName: row.repo_full_name,
-      workflowConfigPath: row.workflow_config_path ?? undefined,
-      allowedExecutors: JSON.parse(row.allowed_executors_json),
-    }));
+    return (this.db.prepare("SELECT * FROM projects ORDER BY name").all() as ProjectRow[]).map(mapProjectRow);
   }
 
   getProject(id: string): Project | undefined {
-    const row = this.db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as any;
-    return row ? {
-      id: row.id,
-      name: row.name,
-      repoRoot: row.repo_root,
-      repoFullName: row.repo_full_name,
-      workflowConfigPath: row.workflow_config_path ?? undefined,
-      allowedExecutors: JSON.parse(row.allowed_executors_json),
-    } : undefined;
+    const row = this.db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as ProjectRow | undefined;
+    return row ? mapProjectRow(row) : undefined;
   }
 
   upsertWorkItem(workItem: WorkItem): WorkItem {
@@ -238,44 +424,17 @@ export class CanonicalStore {
   getWorkItemByExternalId(projectId: string, externalId: string): WorkItem | undefined {
     const row = this.db.prepare(
       "SELECT * FROM work_items WHERE project_id = ? AND external_id = ? LIMIT 1",
-    ).get(projectId, externalId) as any;
-    return row ? {
-      id: row.id,
-      projectId: row.project_id,
-      kind: row.kind,
-      externalId: row.external_id,
-      title: row.title,
-      state: row.state,
-      labels: JSON.parse(row.labels_json),
-      url: row.url,
-    } : undefined;
+    ).get(projectId, externalId) as WorkItemRow | undefined;
+    return row ? mapWorkItemRow(row) : undefined;
   }
 
   listWorkItems(projectId: string): WorkItem[] {
-    return this.db.prepare("SELECT * FROM work_items WHERE project_id = ? ORDER BY external_id DESC").all(projectId).map((row: any) => ({
-      id: row.id,
-      projectId: row.project_id,
-      kind: row.kind,
-      externalId: row.external_id,
-      title: row.title,
-      state: row.state,
-      labels: JSON.parse(row.labels_json),
-      url: row.url,
-    }));
+    return (this.db.prepare("SELECT * FROM work_items WHERE project_id = ? ORDER BY external_id DESC").all(projectId) as WorkItemRow[]).map(mapWorkItemRow);
   }
 
   getWorkItem(id: string): WorkItem | undefined {
-    const row = this.db.prepare("SELECT * FROM work_items WHERE id = ?").get(id) as any;
-    return row ? {
-      id: row.id,
-      projectId: row.project_id,
-      kind: row.kind,
-      externalId: row.external_id,
-      title: row.title,
-      state: row.state,
-      labels: JSON.parse(row.labels_json),
-      url: row.url,
-    } : undefined;
+    const row = this.db.prepare("SELECT * FROM work_items WHERE id = ?").get(id) as WorkItemRow | undefined;
+    return row ? mapWorkItemRow(row) : undefined;
   }
 
   createWorkflowInstance(input: {
@@ -354,50 +513,18 @@ export class CanonicalStore {
   }
 
   getWorkflowInstance(id: string): WorkflowInstance | undefined {
-    const row = this.db.prepare("SELECT * FROM workflow_instances WHERE id = ?").get(id) as any;
-    return row ? {
-      id: row.id,
-      projectId: row.project_id,
-      workItemId: row.work_item_id,
-      stage: row.stage,
-      status: row.status,
-      statusReason: row.status_reason ?? undefined,
-      repairRound: row.repair_round,
-      prNumber: row.pr_number ?? undefined,
-      prUrl: row.pr_url ?? undefined,
-      branch: row.branch,
-      baseBranch: row.base_branch,
-      baseSha: row.base_sha,
-      baselineSnapshot: deserializeBaselineSnapshot(row.baseline_snapshot_json),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    } : undefined;
+    const row = this.db.prepare("SELECT * FROM workflow_instances WHERE id = ?").get(id) as WorkflowInstanceRow | undefined;
+    return row ? mapWorkflowInstanceRow(row) : undefined;
   }
 
   getWorkflowBranch(id: string): string {
-    const row = this.db.prepare("SELECT branch FROM workflow_instances WHERE id = ?").get(id) as any;
+    const row = this.db.prepare("SELECT branch FROM workflow_instances WHERE id = ?").get(id) as WorkflowBranchRow | undefined;
     if (!row) throw new Error(`Workflow ${id} not found`);
     return row.branch;
   }
 
   listWorkflowInstances(): WorkflowInstance[] {
-    return this.db.prepare("SELECT * FROM workflow_instances ORDER BY updated_at DESC").all().map((row: any) => ({
-      id: row.id,
-      projectId: row.project_id,
-      workItemId: row.work_item_id,
-      stage: row.stage,
-      status: row.status,
-      statusReason: row.status_reason ?? undefined,
-      repairRound: row.repair_round,
-      prNumber: row.pr_number ?? undefined,
-      prUrl: row.pr_url ?? undefined,
-      branch: row.branch,
-      baseBranch: row.base_branch,
-      baseSha: row.base_sha,
-      baselineSnapshot: deserializeBaselineSnapshot(row.baseline_snapshot_json),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    return (this.db.prepare("SELECT * FROM workflow_instances ORDER BY updated_at DESC").all() as WorkflowInstanceRow[]).map(mapWorkflowInstanceRow);
   }
 
   createTask(input: {
@@ -434,28 +561,12 @@ export class CanonicalStore {
   }
 
   getTask(id: string): Task | undefined {
-    const row = this.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as any;
-    return row ? {
-      id: row.id,
-      workflowInstanceId: row.workflow_instance_id,
-      type: row.type,
-      status: row.status,
-      executorId: row.executor_id,
-      runnerId: row.runner_id,
-      attemptIds: JSON.parse(row.attempt_ids_json),
-    } : undefined;
+    const row = this.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | undefined;
+    return row ? mapTaskRow(row) : undefined;
   }
 
   listTasks(workflowInstanceId: string): Task[] {
-    return this.db.prepare("SELECT * FROM tasks WHERE workflow_instance_id = ? ORDER BY rowid").all(workflowInstanceId).map((row: any) => ({
-      id: row.id,
-      workflowInstanceId: row.workflow_instance_id,
-      type: row.type,
-      status: row.status,
-      executorId: row.executor_id,
-      runnerId: row.runner_id,
-      attemptIds: JSON.parse(row.attempt_ids_json),
-    }));
+    return (this.db.prepare("SELECT * FROM tasks WHERE workflow_instance_id = ? ORDER BY rowid").all(workflowInstanceId) as TaskRow[]).map(mapTaskRow);
   }
 
   createAttempt(input: {
@@ -497,32 +608,12 @@ export class CanonicalStore {
   }
 
   getAttempt(id: string): ExecutionAttempt | undefined {
-    const row = this.db.prepare("SELECT * FROM execution_attempts WHERE id = ?").get(id) as any;
-    return row ? {
-      id: row.id,
-      taskId: row.task_id,
-      executorId: row.executor_id,
-      runnerId: row.runner_id,
-      startedAt: row.started_at,
-      finishedAt: row.finished_at ?? undefined,
-      status: row.status,
-      resultPath: row.result_path ?? undefined,
-      workspacePath: row.workspace_path ?? undefined,
-    } : undefined;
+    const row = this.db.prepare("SELECT * FROM execution_attempts WHERE id = ?").get(id) as ExecutionAttemptRow | undefined;
+    return row ? mapExecutionAttemptRow(row) : undefined;
   }
 
   listAttempts(taskId: string): ExecutionAttempt[] {
-    return this.db.prepare("SELECT * FROM execution_attempts WHERE task_id = ? ORDER BY started_at").all(taskId).map((row: any) => ({
-      id: row.id,
-      taskId: row.task_id,
-      executorId: row.executor_id,
-      runnerId: row.runner_id,
-      startedAt: row.started_at,
-      finishedAt: row.finished_at ?? undefined,
-      status: row.status,
-      resultPath: row.result_path ?? undefined,
-      workspacePath: row.workspace_path ?? undefined,
-    }));
+    return (this.db.prepare("SELECT * FROM execution_attempts WHERE task_id = ? ORDER BY started_at").all(taskId) as ExecutionAttemptRow[]).map(mapExecutionAttemptRow);
   }
 
   createApproval(input: { workflowInstanceId: string; stage: WorkflowTaskType; status?: Approval["status"]; note?: string }): Approval {
@@ -543,26 +634,15 @@ export class CanonicalStore {
   getPendingApproval(workflowInstanceId: string): Approval | undefined {
     const row = this.db.prepare(
       "SELECT * FROM approvals WHERE workflow_instance_id = ? AND status = 'pending' ORDER BY rowid DESC LIMIT 1",
-    ).get(workflowInstanceId) as any;
-    return row ? {
-      id: row.id,
-      workflowInstanceId: row.workflow_instance_id,
-      stage: row.stage,
-      status: row.status,
-      note: row.note ?? undefined,
-    } : undefined;
+    ).get(workflowInstanceId) as ApprovalRow | undefined;
+    return row ? mapApprovalRow(row) : undefined;
   }
 
   updateApproval(id: string, status: Approval["status"], note?: string): Approval {
     this.db.prepare("UPDATE approvals SET status = ?, note = ? WHERE id = ?").run(status, note ?? null, id);
-    const row = this.db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as any;
-    return {
-      id: row.id,
-      workflowInstanceId: row.workflow_instance_id,
-      stage: row.stage,
-      status: row.status,
-      note: row.note ?? undefined,
-    };
+    const row = this.db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as ApprovalRow | undefined;
+    if (!row) throw new Error(`Approval ${id} not found after update`);
+    return mapApprovalRow(row);
   }
 
   recordEvent(taskId: string, event: TaskExecutionEvent): void {
@@ -574,12 +654,7 @@ export class CanonicalStore {
   }
 
   listEvents(taskId: string): PersistedTaskEvent[] {
-    return this.db.prepare("SELECT * FROM task_events WHERE task_id = ? ORDER BY id").all(taskId).map((row: any) => ({
-      id: row.id,
-      taskId: row.task_id,
-      event: JSON.parse(row.event_json),
-      createdAt: row.created_at,
-    }));
+    return (this.db.prepare("SELECT * FROM task_events WHERE task_id = ? ORDER BY id").all(taskId) as TaskEventRow[]).map(mapTaskEventRow);
   }
 
   recordArtifacts(taskId: string, artifacts: ArtifactRef[]): void {
@@ -593,12 +668,7 @@ export class CanonicalStore {
   }
 
   listArtifacts(taskId: string): ArtifactRef[] {
-    return this.db.prepare("SELECT * FROM task_artifacts WHERE task_id = ? ORDER BY created_at").all(taskId).map((row: any) => ({
-      kind: row.kind,
-      path: row.path,
-      mimeType: row.mime_type ?? undefined,
-      createdAt: row.created_at,
-    }));
+    return (this.db.prepare("SELECT kind, path, mime_type, created_at FROM task_artifacts WHERE task_id = ? ORDER BY created_at").all(taskId) as TaskArtifactRow[]).map(mapTaskArtifactRow);
   }
 
   recordResult(taskId: string, result: TaskExecutionResult): void {
@@ -612,11 +682,8 @@ export class CanonicalStore {
   }
 
   getTaskResult(taskId: string): PersistedTaskResult | undefined {
-    const row = this.db.prepare("SELECT * FROM task_results WHERE task_id = ?").get(taskId) as any;
-    return row ? {
-      taskId: row.task_id,
-      result: JSON.parse(row.result_json),
-    } : undefined;
+    const row = this.db.prepare("SELECT task_id, result_json FROM task_results WHERE task_id = ?").get(taskId) as TaskResultRow | undefined;
+    return row ? mapTaskResultRow(row) : undefined;
   }
 
   getWorkflowSnapshot(id: string): {
@@ -644,13 +711,7 @@ export class CanonicalStore {
     const results = tasks
       .map((task) => this.getTaskResult(task.id))
       .filter((result): result is PersistedTaskResult => result !== undefined);
-    const approvals = this.db.prepare("SELECT * FROM approvals WHERE workflow_instance_id = ? ORDER BY rowid").all(id).map((row: any) => ({
-      id: row.id,
-      workflowInstanceId: row.workflow_instance_id,
-      stage: row.stage,
-      status: row.status,
-      note: row.note ?? undefined,
-    }));
+    const approvals = (this.db.prepare("SELECT * FROM approvals WHERE workflow_instance_id = ? ORDER BY rowid").all(id) as ApprovalRow[]).map(mapApprovalRow);
     return { workflow, project, workItem, tasks, attempts, events, artifacts, results, approvals };
   }
 }
