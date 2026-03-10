@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -73,6 +73,41 @@ function createService(): { store: CanonicalStore; service: WorkflowService } {
   };
 }
 
+function hasFlag(args: string[], flag: string): boolean {
+  return args.includes(flag);
+}
+
+function formatStatus(view: ReturnType<WorkflowService["getStatusView"]>): string {
+  const artifactLines = Object.entries(view.artifacts)
+    .map(([kind, path]) => `  ${kind}: ${path}`)
+    .join("\n");
+  const approvalLines = view.approvalHistory
+    .map((approval) => {
+      const note = approval.note ? ` (${approval.note})` : "";
+      return `  ${approval.stage}: ${approval.status}${note}`;
+    })
+    .join("\n");
+  const latestResult = view.latestResult
+    ? `${view.latestResult.taskType}: ${view.latestResult.status}${view.latestResult.error ? ` (${view.latestResult.error.code}: ${view.latestResult.error.message})` : ""}`
+    : "none yet";
+
+  return [
+    `Workflow: ${view.workflowId}`,
+    `Issue: #${view.issue.externalId} ${view.issue.title}`,
+    `URL: ${view.issue.url}`,
+    `Stage: ${view.stage}`,
+    `Status: ${view.status}`,
+    `Approval pending: ${view.approvalPending ? `yes (${view.approvalStage})` : "no"}`,
+    `Status reason: ${view.statusReason ?? "none"}`,
+    `Latest result: ${latestResult}`,
+    "Artifacts:",
+    artifactLines || "  none yet",
+    "Approvals:",
+    approvalLines || "  none yet",
+    `Next action: ${view.nextAction}`,
+  ].join("\n");
+}
+
 function printHelp(): void {
   console.log(`devagent-hub
 
@@ -86,7 +121,7 @@ Commands:
   pr open <id>
   pr repair <id>
   list
-  status <id>
+  status <id> [--json]
   tui [--screen inbox|runs|detail|settings] [--workflow <id>]
   help
 `);
@@ -234,11 +269,15 @@ if (command === "list") {
 if (command === "status") {
   const workflowId = subcommand;
   if (!workflowId) {
-    throw new Error("Usage: devagent-hub status <id>");
+    throw new Error("Usage: devagent-hub status <id> [--json]");
   }
   const { store, service } = createService();
   try {
-    console.log(JSON.stringify(service.getSnapshot(workflowId), null, 2));
+    if (hasFlag(args, "--json")) {
+      console.log(JSON.stringify(service.getSnapshot(workflowId), null, 2));
+    } else {
+      console.log(formatStatus(service.getStatusView(workflowId)));
+    }
   } finally {
     store.close();
   }

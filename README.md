@@ -2,10 +2,27 @@
 
 Canonical workflow orchestrator for the DevAgent stack.
 
-Hub owns issue import, workflow state, task generation, approvals, persistence, TUI/CLI operator
+Hub owns issue import, workflow state, task generation, approvals, persistence, operator CLI/TUI
 surfaces, and PR handoff. It does not launch executors directly. Hub resolves an `ExecutorSpec`,
-submits an SDK request to `devagent-runner`, ingests normalized events/results/artifacts, and drives
-the staged workflow around them.
+submits an SDK request to `devagent-runner`, ingests normalized events/results/artifacts, and
+drives the staged workflow around them.
+
+## Validated Path
+
+The production-grade MVP path is:
+
+```text
+devagent-hub -> devagent-runner -> devagent execute --request ... --artifact-dir ...
+```
+
+Current live-validated executor settings:
+
+- executor: `devagent`
+- provider: `chatgpt`
+- model: `gpt-5.4`
+
+Other runner adapters (`codex`, `claude`, `opencode`) are present and smoke-tested, but still
+experimental.
 
 ## Canonical Flow
 
@@ -22,8 +39,48 @@ GitHub issue
   -> PR handoff
 ```
 
-The current live-validated executor path is `devagent` with `provider: chatgpt` and
-`model: gpt-5.4`.
+Hub also enforces review blast-radius controls from `WORKFLOW.md`:
+
+- `review.max_changed_files`
+  - if exceeded after `implement` or `repair`, Hub pauses for manual approval
+- `review.run_max_changed_files`
+  - if exceeded, Hub stops automatic continuation and marks the workflow failed with an explicit reason
+- `review.max_patch_bytes`
+  - if exceeded after `implement` or `repair`, Hub pauses for manual approval
+- `review.run_max_patch_bytes`
+  - if exceeded, Hub stops automatic continuation and marks the workflow failed with an explicit reason
+
+## Bootstrap Local Development
+
+Hub is the canonical bootstrap entrypoint for the four sibling repos.
+
+Expected layout:
+
+```text
+<workspace-root>/
+  devagent-sdk/
+  devagent-runner/
+  devagent/
+  devagent-hub/
+```
+
+Bootstrap from the `devagent-hub` repo root:
+
+```bash
+bun install
+bun run bootstrap:local
+```
+
+That script:
+
+- verifies the sibling checkout layout
+- clones missing sibling repos from the pinned baseline manifest
+- checks out `main` in all four repos
+- runs install/build in dependency order
+- links the local CLIs so these commands are ready:
+  - `devagent`
+  - `devagent-runner`
+  - `devagent-hub`
 
 ## CLI
 
@@ -38,45 +95,142 @@ devagent-hub pr open <workflow-id>
 devagent-hub pr repair <workflow-id>
 devagent-hub list
 devagent-hub status <workflow-id>
+devagent-hub status <workflow-id> --json
 devagent-hub tui --screen runs
 ```
 
-## Human Review
+## Review The Plan
 
-Hub has two hard approval checkpoints:
+When a workflow pauses after `plan`, you do not need to scrape logs. Use `status`.
 
-- after `plan`
-- before PR creation
+Example:
 
-Operator actions:
+```bash
+devagent-hub run start --issue 42
+devagent-hub status <workflow-id>
+```
 
-- approve the plan with `run resume`
-- reject and rerun the plan with `run reject --note "..."`
-- approve PR handoff with `pr open`
-- reject the final pre-PR review with `run reject --note "..."`
+Default `status` output shows:
 
-For an already-open PR, use `pr repair <workflow-id>` to turn GitHub review comments and failing CI
-logs into a `repair -> verify -> review` cycle on the existing workflow branch.
+- workflow id
+- current stage and status
+- whether approval is pending
+- latest artifact paths, including `plan.md`
+- latest result or failure
+- next recommended operator action
 
-## TUI
+Typical output looks like:
 
-The canonical TUI exposes four views:
+```text
+Workflow: 123e4567-e89b-12d3-a456-426614174000
+Issue: #42 Fix run detail header
+Stage: plan
+Status: waiting_approval
+Approval pending: yes (plan)
+Status reason: none
+Latest result: plan: success
+Artifacts:
+  plan: .devagent-runner/artifacts/task-42/plan.md
+Approvals:
+  plan: pending
+Next action: Review the plan artifact, then run: devagent-hub run resume 123e4567-e89b-12d3-a456-426614174000
+```
 
-- `Inbox`: imported GitHub issues
-- `Runs`: active and completed workflow instances
-- `Run Detail`: tasks, attempts, events, artifacts, approvals
-- `Settings`: project and executor availability
+If the workflow is paused after `plan`, review the artifact directly:
+
+```bash
+cat .devagent-runner/artifacts/<task-id>/plan.md
+```
+
+Or use the exact path printed by `devagent-hub status <workflow-id>`.
+
+Then choose:
+
+```bash
+devagent-hub run resume <workflow-id>
+```
+
+or:
+
+```bash
+devagent-hub run reject <workflow-id> --note "expand rollback notes and split migration from implementation"
+```
+
+How feedback is used:
+
+- a rejected `plan` note becomes input to the next `plan` attempt
+- the rerun pauses again so a human can re-review the updated plan
+
+Use `status --json` only for scripts or external tooling. The default text output is the intended
+operator view.
+
+## Review Before PR
+
+After `implement -> verify -> review` completes cleanly, Hub pauses again before PR handoff.
+
+Use:
+
+```bash
+devagent-hub status <workflow-id>
+```
+
+Review the latest:
+
+- `verification-report.md`
+- `review-report.md`
+- `implementation-summary.md`
+
+Then either open the PR:
+
+```bash
+devagent-hub pr open <workflow-id>
+```
+
+or reject and request more fixes:
+
+```bash
+devagent-hub run reject <workflow-id> --note "address security concerns before PR handoff"
+```
+
+How feedback is used:
+
+- a rejected final approval note becomes input to the next `repair`
+- Hub then reruns `repair -> verify -> review` and pauses again
+
+## Post-PR Feedback
+
+For an already-open PR, use:
+
+```bash
+devagent-hub pr repair <workflow-id>
+```
+
+Hub fetches:
+
+- GitHub review comments
+- file/line context when GitHub provides it
+- failing CI logs
+
+That feedback becomes the next `repair` request context, together with changed-file hints and the
+latest `review-report` / `verification-report`.
+
+After repair succeeds, Hub reruns:
+
+```text
+repair -> verify -> review
+```
+
+and pushes the updated branch.
 
 ## Local Development Wiring
 
-This repo consumes local packages through file dependencies:
+This repo currently consumes local packages through file dependencies:
 
-- `@devagent-sdk/types` from `../devagent-sdk/packages/types`
-- `@devagent-runner/adapters` from `../devagent-runner/packages/adapters`
-- `@devagent-runner/local-runner` from `../devagent-runner/packages/local-runner`
+- `@devagent-sdk/*` from `../devagent-sdk`
+- `@devagent-runner/*` from `../devagent-runner`
 
-The local runner in turn reaches `../devagent/packages/cli/dist/index.js` for the `devagent execute`
-machine entrypoint.
+That sibling layout is still MVP-only wiring, but the supported local path is now the bootstrap
+script above rather than ad hoc manual setup.
 
 ## Development
 
@@ -87,25 +241,6 @@ bun run test
 bun run build
 ```
 
-`bun run test` uses Node-backed Vitest through [vitest.config.ts](/Users/eg/Documents/devagent-hub/vitest.config.ts)
-because the canonical store is built on `better-sqlite3`, and local validation output under
-`.devagent-runner/` must be excluded from test discovery.
-
-## Validation
-
-The intended end-to-end loop is:
-
-```text
-project add -> issue sync -> run start -> run resume -> pr open
-```
-
-That path has unit coverage for canonical persistence, workflow progression, approval pause/resume,
-runner event ingestion, rejection/replan behavior, post-PR repair behavior, PR handoff, and the
-canonical TUI views.
-
-The pinned release-candidate baseline is recorded in [baseline.json](/Users/eg/Documents/devagent-hub/baseline.json),
-and the operator checklist lives in [BASELINE_VALIDATION.md](/Users/eg/Documents/devagent-hub/BASELINE_VALIDATION.md).
-
 Additional baseline commands:
 
 ```bash
@@ -114,3 +249,15 @@ bun run baseline:drift
 bun run baseline:compat
 bun run baseline:smoke
 ```
+
+`bun run test` uses Node-backed Vitest through [vitest.config.ts](vitest.config.ts) because the
+canonical store is built on `better-sqlite3`, and local validation output under `.devagent-runner/`
+is excluded from discovery.
+
+## Validation
+
+The pinned release-candidate baseline is recorded in [baseline.json](baseline.json), and the full
+operator checklist lives in [BASELINE_VALIDATION.md](BASELINE_VALIDATION.md).
+
+See [WORKFLOW.md](WORKFLOW.md) for repo-local workflow configuration semantics, including review size
+limits and human approval behavior.

@@ -51,6 +51,12 @@ verify:
     - bunx tsc --noEmit
     - bun run build
 
+review:
+  max_changed_files: 20
+  run_max_changed_files: 30
+  max_patch_bytes: 30000
+  run_max_patch_bytes: 60000
+
 pr:
   draft: true
   open_requires: [review]
@@ -65,6 +71,7 @@ repair:
 
 - stage-to-profile mapping
 - verify commands
+- review size limits
 - repair max rounds
 - skill selection by stage and path
 - PR draft/open rules
@@ -99,14 +106,67 @@ That is the live-validated path for end-to-end issue-to-PR runs through Hub.
 
 Hub exposes these operator actions on top of the staged workflow:
 
-- `run resume <workflow-id>`: approve the pending plan and continue into implementation
+- `run resume <workflow-id>`
+  - approves the pending plan
+  - or continues after a manual oversize-change approval on `implement` or `repair`
 - `run reject <workflow-id> --note "..."`
   - if the workflow is waiting on `plan`, Hub reruns `plan` with the human note and pauses again
   - if the workflow is waiting on `review`, Hub runs `repair -> verify -> review` with the human note and pauses again
-- `pr open <workflow-id>`: approve final handoff and open the PR
-- `pr repair <workflow-id>`: fetch GitHub review comments plus failing CI logs for the opened PR, run `repair -> verify -> review` on the same branch, push updates, and resolve addressed review threads
-  - review comments are passed to the repair task with file and line context when GitHub provides them
-  - `verify.commands` should mirror the repo's real local CI-equivalent checks; do not point them at commands that are known to fail in a runner worktree
+- `pr open <workflow-id>`
+  - approves final handoff and opens the PR
+- `pr repair <workflow-id>`
+  - fetches GitHub review comments plus failing CI logs for the opened PR
+  - runs `repair -> verify -> review` on the same branch
+  - pushes updates and resolves addressed review threads
+
+## How To Review A Plan
+
+When the workflow pauses on `plan`, use:
+
+```bash
+devagent-hub status <workflow-id>
+```
+
+`status` prints the latest artifact paths. Open the printed `plan.md` path directly, review it, then
+either:
+
+```bash
+devagent-hub run resume <workflow-id>
+```
+
+or:
+
+```bash
+devagent-hub run reject <workflow-id> --note "expand rollback notes and split migration from implementation"
+```
+
+The rejection note becomes input to the next `plan`.
+
+## Post-PR Feedback
+
+`pr repair` uses:
+
+- GitHub review comments
+- file and line context when GitHub provides it
+- failing CI logs
+- latest `review-report` and `verification-report`
+
+That feedback becomes the next `repair` request context.
+
+## Review Size Controls
+
+Hub enforces:
+
+- `review.max_changed_files`
+  - if exceeded after `implement` or `repair`, Hub pauses for manual approval
+- `review.run_max_changed_files`
+  - if exceeded, Hub stops automatic continuation and marks the workflow failed
+- `review.max_patch_bytes`
+  - if exceeded after `implement` or `repair`, Hub pauses for manual approval
+- `review.run_max_patch_bytes`
+  - if exceeded, Hub stops automatic continuation and marks the workflow failed
+
+These are runtime rules, not advisory config.
 
 ## Baseline Safety
 

@@ -4,7 +4,7 @@ This repo owns the pinned baseline manifest for the four-repo machine path.
 
 ## Pinned Baseline
 
-The canonical baseline is stored in [baseline.json](/Users/eg/Documents/devagent-hub/baseline.json).
+The canonical baseline is stored in [baseline.json](baseline.json).
 
 Validation assumes:
 
@@ -13,56 +13,43 @@ Validation assumes:
 - each repo matches the SHA recorded in the manifest
 - protocol version is `0.1`
 
-## Local Checklist
+## Bootstrap
+
+From the `devagent-hub` repo root:
 
 ```bash
-cd /Users/eg/Documents/devagent-sdk && bun install && bun run typecheck && bun run test
-cd /Users/eg/Documents/devagent-runner && bun install && bun run typecheck && bun run test
-cd /Users/eg/Documents/devagent && bun install && bun run typecheck && bun run test
-cd /Users/eg/Documents/devagent-hub && bun install && bunx tsc --noEmit && bun run test && bun run build
-cd /Users/eg/Documents/devagent-hub && bun run baseline:drift
-cd /Users/eg/Documents/devagent-hub && bun run baseline:compat
-cd /Users/eg/Documents/devagent-hub && bun run baseline:smoke
+bun install
+bun run bootstrap:local
 ```
 
-`baseline:check` is intentionally strict and should be run only when the working trees are expected to
-match the pinned manifest exactly.
+That bootstrap path is the only documented local setup flow for this MVP. It builds the sibling
+repos in dependency order and links the local CLIs:
 
-## Fresh-Clone Bootstrap
+- `devagent`
+- `devagent-runner`
+- `devagent-hub`
 
-Fresh live validation assumes the four baseline repos are checked out as siblings, for example:
+## Local Baseline Checks
 
-```text
-/Users/eg/Documents/_baseline-live/
-  devagent-sdk/
-  devagent-runner/
-  devagent/
-  devagent-hub/
-```
-
-Bootstrap the fresh clone environment in this order:
+Run these from the sibling repos after bootstrap:
 
 ```bash
-cd /Users/eg/Documents/_baseline-live/devagent-sdk && git checkout main && bun install && bun run build
-cd /Users/eg/Documents/_baseline-live/devagent-runner && git checkout main && bun install && bun run build
-cd /Users/eg/Documents/_baseline-live/devagent && git checkout main && bun install
-cd /Users/eg/Documents/_baseline-live/devagent-hub && git checkout main && bun install
+cd ../devagent-sdk && bun run typecheck && bun run test
+cd ../devagent-runner && bun run typecheck && bun run test
+cd ../devagent && bun run typecheck && bun run test
+cd ../devagent-hub && bunx tsc --noEmit && bun run test && bun run build
+cd ../devagent-hub && bun run baseline:drift
+cd ../devagent-hub && bun run baseline:compat
+cd ../devagent-hub && bun run baseline:smoke
 ```
 
-If sibling `file:` dependencies were missing when `bun install` last ran in the target repo, rerun
-`bun install` in that target repo after the sibling repos are present and built. This applies
-especially before running `verify.commands` in fresh live workflows.
+`baseline:check` is intentionally strict and should be run only when the working trees are expected
+to match the pinned manifest exactly.
 
-Repo-specific skill availability must also be present in the clean clone:
-
-- `devagent` fresh-clone workflows expect repo-owned `testing` and `security-checklist` skills
-- `devagent-hub` fresh-clone workflows expect valid frontmatter in repo-owned skills under `.agents/skills/`
-
-## What The Baseline Scripts Cover
+## What The Baseline Scripts Prove
 
 - `baseline:check`
   - verifies each sibling repo matches the manifest SHA and has a clean working tree
-  - treats `devagent-hub` as a self-reference exemption because a checked-in manifest cannot pin the same commit that updates it
 - `baseline:drift`
   - fails if protocol types are declared outside `devagent-sdk`
 - `baseline:compat`
@@ -72,6 +59,123 @@ Repo-specific skill availability must also be present in the clean clone:
   - covers `triage`, `plan`, `implement`, `verify`, `review`, `repair`
   - includes failure drills for invalid requests, bad verification commands, missing artifact directory, unsupported capability, and cancellation
 
+## Fresh Issue To PR Flow
+
+The standard assisted path is:
+
+```bash
+devagent-hub project add
+devagent-hub issue sync
+devagent-hub run start --issue <number>
+devagent-hub status <workflow-id>
+devagent-hub run resume <workflow-id>
+devagent-hub status <workflow-id>
+devagent-hub pr open <workflow-id>
+```
+
+Success criteria:
+
+- the workflow pauses after `plan`
+- the workflow pauses again before PR handoff
+- `status` shows the latest artifact paths and next operator action
+- the PR opens from a fresh branch off current `main`
+
+## Review The Plan
+
+If logs are not enough, use the artifact path from `status`.
+
+Example:
+
+```bash
+devagent-hub status <workflow-id>
+cat <path-printed-for-plan.md>
+```
+
+Expected `status` shape:
+
+```text
+Workflow: <workflow-id>
+Stage: plan
+Status: waiting_approval
+Approval pending: yes (plan)
+Artifacts:
+  plan: .devagent-runner/artifacts/<task-id>/plan.md
+Next action: Review the plan artifact, then run: devagent-hub run resume <workflow-id>
+```
+
+Approve:
+
+```bash
+devagent-hub run resume <workflow-id>
+```
+
+Reject with human feedback:
+
+```bash
+devagent-hub run reject <workflow-id> --note "plan is too broad; keep this PR under 10 files"
+```
+
+Expected behavior:
+
+- the note becomes input to the next `plan`
+- Hub reruns `plan`
+- the workflow pauses again on `plan` for another human review pass
+
+## Review Before PR
+
+When the workflow pauses before PR creation:
+
+```bash
+devagent-hub status <workflow-id>
+cat <path-printed-for-verification-report.md>
+cat <path-printed-for-review-report.md>
+```
+
+Approve final handoff:
+
+```bash
+devagent-hub pr open <workflow-id>
+```
+
+Reject and request more fixes:
+
+```bash
+devagent-hub run reject <workflow-id> --note "address security concerns before PR handoff"
+```
+
+Expected behavior:
+
+- the note becomes input to the next `repair`
+- Hub reruns `repair -> verify -> review`
+- the workflow pauses again before PR handoff
+
+## Post-PR Repair Flow
+
+Once the PR is open and has review comments or failing checks:
+
+```bash
+devagent-hub pr repair <workflow-id>
+devagent-hub status <workflow-id>
+```
+
+Expected behavior:
+
+- GitHub review comments and CI logs are fetched
+- repair context includes changed-file hints when available
+- Hub reruns `repair -> verify -> review`
+- the existing PR branch is updated
+
+## Oversize Change Safety
+
+Hub enforces review size controls from `WORKFLOW.md`:
+
+- if changed files exceed `review.max_changed_files`, Hub pauses for manual approval with an explicit reason
+- if changed files exceed `review.run_max_changed_files`, Hub stops automatic continuation and marks the workflow failed
+- if patch size exceeds `review.max_patch_bytes`, Hub pauses for manual approval with an explicit reason
+- if patch size exceeds `review.run_max_patch_bytes`, Hub stops automatic continuation and marks the workflow failed
+
+Use `devagent-hub status <workflow-id>` to see the escalation reason and the next safe action.
+
 ## Stale-State Rules
 
 Hub stores a baseline snapshot on workflow start:
@@ -80,7 +184,8 @@ Hub stores a baseline snapshot on workflow start:
 - target base SHA
 - pinned system baseline `{ sdkSha, runnerSha, devagentSha, hubSha, protocolVersion }`
 
-On `run resume`, `pr open`, and `pr repair`, Hub compares the stored snapshot with current repo state.
+On `run resume`, `pr open`, and `pr repair`, Hub compares the stored snapshot with current repo
+state.
 
 If the baseline no longer matches, Hub fails explicitly with:
 

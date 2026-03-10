@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS workflow_instances (
   work_item_id TEXT NOT NULL,
   stage TEXT NOT NULL,
   status TEXT NOT NULL,
+  status_reason TEXT,
   repair_round INTEGER NOT NULL,
   pr_number INTEGER,
   pr_url TEXT,
@@ -132,6 +133,9 @@ export class CanonicalStore {
   private ensureWorkflowColumns(): void {
     const columns = this.db.prepare("PRAGMA table_info(workflow_instances)").all() as Array<{ name: string }>;
     const names = new Set(columns.map((column) => column.name));
+    if (!names.has("status_reason")) {
+      this.db.exec("ALTER TABLE workflow_instances ADD COLUMN status_reason TEXT");
+    }
     if (!names.has("pr_number")) {
       this.db.exec("ALTER TABLE workflow_instances ADD COLUMN pr_number INTEGER");
     }
@@ -300,16 +304,17 @@ export class CanonicalStore {
     };
     this.db.prepare(`
       INSERT INTO workflow_instances (
-        id, project_id, work_item_id, stage, status, repair_round, pr_number, pr_url,
+        id, project_id, work_item_id, stage, status, status_reason, repair_round, pr_number, pr_url,
         branch, base_branch, base_sha, baseline_snapshot_json, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       workflow.id,
       workflow.projectId,
       workflow.workItemId,
       workflow.stage,
       workflow.status,
+      workflow.statusReason ?? null,
       workflow.repairRound,
       workflow.prNumber ?? null,
       workflow.prUrl ?? null,
@@ -329,11 +334,12 @@ export class CanonicalStore {
     const next = { ...current, ...patch, updatedAt: now() };
     this.db.prepare(`
       UPDATE workflow_instances
-      SET stage = ?, status = ?, repair_round = ?, pr_number = ?, pr_url = ?, branch = ?, base_branch = ?, base_sha = ?, baseline_snapshot_json = ?, updated_at = ?
+      SET stage = ?, status = ?, status_reason = ?, repair_round = ?, pr_number = ?, pr_url = ?, branch = ?, base_branch = ?, base_sha = ?, baseline_snapshot_json = ?, updated_at = ?
       WHERE id = ?
     `).run(
       next.stage,
       next.status,
+      next.statusReason ?? null,
       next.repairRound,
       next.prNumber ?? null,
       next.prUrl ?? null,
@@ -355,6 +361,7 @@ export class CanonicalStore {
       workItemId: row.work_item_id,
       stage: row.stage,
       status: row.status,
+      statusReason: row.status_reason ?? undefined,
       repairRound: row.repair_round,
       prNumber: row.pr_number ?? undefined,
       prUrl: row.pr_url ?? undefined,
@@ -380,6 +387,7 @@ export class CanonicalStore {
       workItemId: row.work_item_id,
       stage: row.stage,
       status: row.status,
+      statusReason: row.status_reason ?? undefined,
       repairRound: row.repair_round,
       prNumber: row.pr_number ?? undefined,
       prUrl: row.pr_url ?? undefined,

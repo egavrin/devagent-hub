@@ -158,6 +158,8 @@ class StubRunnerClient implements RunnerClient {
   constructor(
     private readonly repoRoot: string,
     private readonly reviewSequence: string[],
+    private readonly changedFilesByTaskType: Partial<Record<TaskExecutionRequest["taskType"], string[]>> = {},
+    private readonly patchBytesByTaskType: Partial<Record<TaskExecutionRequest["taskType"], number>> = {},
   ) {}
 
   async startTask(request: TaskExecutionRequest): Promise<{ runId: string }> {
@@ -244,6 +246,17 @@ class StubRunnerClient implements RunnerClient {
 
   private async writeArtifact(workspacePath: string, request: TaskExecutionRequest): Promise<ArtifactRef> {
     await mkdir(workspacePath, { recursive: true });
+    const changedFiles = this.changedFilesByTaskType[request.taskType];
+    if (changedFiles) {
+      await writeFile(
+        join(workspacePath, ".devagent-changed-files.json"),
+        JSON.stringify(changedFiles, null, 2),
+      );
+    }
+    const patchBytes = this.patchBytesByTaskType[request.taskType];
+    if (patchBytes !== undefined) {
+      await writeFile(join(workspacePath, ".devagent-patch-bytes.txt"), `${patchBytes}\n`);
+    }
     const current = (() => {
       switch (request.taskType) {
         case "triage":
@@ -371,7 +384,13 @@ class BlockingCancelRunnerClient implements RunnerClient {
   }
 }
 
-async function createService(reviewSequence: string[] = ["No defects found."]) {
+async function createService(
+  reviewSequence: string[] = ["No defects found."],
+  options: {
+    changedFilesByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], string[]>>;
+    patchBytesByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], number>>;
+  } = {},
+) {
   const root = await createTempDir("devagent-hub-service-");
   const dbPath = join(root, "state.db");
   const repoRoot = join(root, "repo");
@@ -398,7 +417,12 @@ async function createService(reviewSequence: string[] = ["No defects found."]) {
     comments: [],
   };
   const github = new StubGitHubGateway(issue);
-  const runner = new StubRunnerClient(repoRoot, [...reviewSequence]);
+  const runner = new StubRunnerClient(
+    repoRoot,
+    [...reviewSequence],
+    options.changedFilesByTaskType,
+    options.patchBytesByTaskType,
+  );
   const config = defaultConfig();
   config.runner.bin = "devagent";
   config.runner.provider = "chatgpt";
@@ -439,6 +463,22 @@ describe("WorkflowService", () => {
     store.close();
   });
 
+  it("builds a human-readable status view for plan review", async () => {
+    const { store, service } = await createService();
+    const workflow = await service.start("42");
+    const status = service.getStatusView(workflow.id);
+
+    expect(status.stage).toBe("plan");
+    expect(status.status).toBe("waiting_approval");
+    expect(status.approvalPending).toBe(true);
+    expect(status.approvalStage).toBe("plan");
+    expect(status.artifacts.plan).toContain("plan.md");
+    expect(status.nextAction).toContain(`devagent-hub run resume ${workflow.id}`);
+    expect(status.nextAction).toContain(`devagent-hub run reject ${workflow.id} --note`);
+
+    store.close();
+  });
+
   it("resumes through implement, verify, review and pauses before PR", async () => {
     const { store, service } = await createService();
     const started = await service.start("42");
@@ -449,6 +489,80 @@ describe("WorkflowService", () => {
     const snapshot = service.getSnapshot(started.id);
     expect(snapshot.tasks.map((task) => task.type)).toEqual(["triage", "plan", "implement", "verify", "review"]);
     expect(snapshot.approvals.at(-1)?.stage).toBe("review");
+
+    store.close();
+  });
+
+  it("pauses for manual approval when implement changes exceed the review file threshold", async () => {
+    const { store, service } = await createService(["No defects found."], {
+      changedFilesByTaskType: {
+        implement: Array.from({ length: 21 }, (_, index) => `src/file-${index}.ts`),
+      },
+    });
+    const started = await service.start("42");
+    const gated = await service.resume(started.id);
+
+    expect(gated.status).toBe("waiting_approval");
+    expect(gated.stage).toBe("implement");
+    expect(gated.statusReason).toContain("review.max_changed_files");
+
+    const resumed = await service.resume(started.id);
+    expect(resumed.status).toBe("waiting_approval");
+    expect(resumed.stage).toBe("review");
+
+    store.close();
+  });
+
+  it("fails when implement changes exceed the run-level review limit", async () => {
+    const { store, service } = await createService(["No defects found."], {
+      changedFilesByTaskType: {
+        implement: Array.from({ length: 31 }, (_, index) => `src/file-${index}.ts`),
+      },
+    });
+    const started = await service.start("42");
+    const failed = await service.resume(started.id);
+
+    expect(failed.status).toBe("failed");
+    expect(failed.stage).toBe("implement");
+    expect(failed.statusReason).toContain("review.run_max_changed_files");
+
+    store.close();
+  });
+
+  it("pauses for manual approval when implement patch size exceeds the review threshold", async () => {
+    const { store, service } = await createService(["No defects found."], {
+      changedFilesByTaskType: {
+        implement: ["README.md"],
+      },
+      patchBytesByTaskType: {
+        implement: 30_001,
+      },
+    });
+    const started = await service.start("42");
+    const gated = await service.resume(started.id);
+
+    expect(gated.status).toBe("waiting_approval");
+    expect(gated.stage).toBe("implement");
+    expect(gated.statusReason).toContain("review.max_patch_bytes");
+
+    store.close();
+  });
+
+  it("fails when implement patch size exceeds the run-level review threshold", async () => {
+    const { store, service } = await createService(["No defects found."], {
+      changedFilesByTaskType: {
+        implement: ["README.md"],
+      },
+      patchBytesByTaskType: {
+        implement: 60_001,
+      },
+    });
+    const started = await service.start("42");
+    const failed = await service.resume(started.id);
+
+    expect(failed.status).toBe("failed");
+    expect(failed.stage).toBe("implement");
+    expect(failed.statusReason).toContain("review.run_max_patch_bytes");
 
     store.close();
   });
@@ -527,6 +641,29 @@ describe("WorkflowService", () => {
     ]);
     const repairTask = snapshot.tasks.find((task) => task.type === "repair");
     expect(repairTask).toBeTruthy();
+
+    store.close();
+  });
+
+  it("pauses for manual approval when repair changes exceed the review file threshold", async () => {
+    const { store, service } = await createService([
+      "Severity: high\nFix recommendation: resolve the lint failure.",
+      "No defects found.",
+    ], {
+      changedFilesByTaskType: {
+        repair: Array.from({ length: 21 }, (_, index) => `src/repair-${index}.ts`),
+      },
+    });
+    const started = await service.start("42");
+    const gated = await service.resume(started.id);
+
+    expect(gated.status).toBe("waiting_approval");
+    expect(gated.stage).toBe("repair");
+    expect(gated.statusReason).toContain("review.max_changed_files");
+
+    const resumed = await service.resume(started.id);
+    expect(resumed.status).toBe("waiting_approval");
+    expect(resumed.stage).toBe("review");
 
     store.close();
   });
@@ -760,6 +897,23 @@ describe("WorkflowService", () => {
     expect(terminal.status).toBe("cancelled");
     expect(runner.cancelledRuns).toHaveLength(1);
     expect(runner.cleanedRuns).toHaveLength(1);
+
+    store.close();
+  });
+
+  it("does not mark a workflow cancelled once it has already reached an approval pause", async () => {
+    const { store, service } = await createService();
+    const started = await service.start("42");
+    const paused = await service.resume(started.id);
+
+    expect(paused.status).toBe("waiting_approval");
+    expect(paused.stage).toBe("review");
+
+    const current = await service.cancel(started.id);
+
+    expect(current.status).toBe("waiting_approval");
+    expect(current.stage).toBe("review");
+    expect(current.statusReason).toBeUndefined();
 
     store.close();
   });

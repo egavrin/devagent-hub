@@ -1,5 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { GitHubGateway } from "../github/gateway.js";
 import type { GitHubIssue } from "../github/types.js";
 import {
@@ -29,6 +32,33 @@ type StageContextOverrides = {
   comments?: Array<{ author?: string; body: string }>;
   extraInstructions?: string[];
   changedFilesHint?: string[];
+};
+
+type StatusArtifactMap = Partial<Record<
+  "triage-report" | "plan" | "implementation-summary" | "verification-report" | "review-report" | "final-summary",
+  string
+>>;
+
+type WorkflowStatusView = {
+  workflowId: string;
+  issue: { externalId: string; title: string; url: string };
+  stage: WorkflowInstance["stage"];
+  status: WorkflowInstance["status"];
+  approvalPending: boolean;
+  approvalStage?: WorkflowTaskType;
+  statusReason?: string;
+  artifacts: StatusArtifactMap;
+  latestResult?: {
+    taskType: WorkflowTaskType;
+    status: TaskExecutionResult["status"];
+    error?: TaskExecutionResult["error"];
+  };
+  approvalHistory: Array<{
+    stage: WorkflowTaskType;
+    status: "pending" | "approved" | "rejected";
+    note?: string;
+  }>;
+  nextAction: string;
 };
 
 function issueId(projectId: string, issue: GitHubIssue): string {
@@ -61,6 +91,10 @@ function artifactKindForStage(stage: WorkflowTaskType): ArtifactKind {
 
 function isFailureStatus(status: WorkflowInstance["status"]): boolean {
   return status === "failed" || status === "cancelled";
+}
+
+function shouldStopProgress(workflow: WorkflowInstance): boolean {
+  return workflow.status !== "running";
 }
 
 export class WorkflowService {
@@ -107,14 +141,22 @@ export class WorkflowService {
       return workflow;
     }
 
-    workflow = this.store.updateWorkflowInstance(workflow.id, { stage: "plan", status: "running" });
+    workflow = this.store.updateWorkflowInstance(workflow.id, {
+      stage: "plan",
+      status: "running",
+      statusReason: undefined,
+    });
     workflow = await this.runStage(workflow, workItem, "plan");
     if (isFailureStatus(workflow.status)) {
       return workflow;
     }
 
     this.store.createApproval({ workflowInstanceId: workflow.id, stage: "plan" });
-    return this.store.updateWorkflowInstance(workflow.id, { stage: "plan", status: "waiting_approval" });
+    return this.store.updateWorkflowInstance(workflow.id, {
+      stage: "plan",
+      status: "waiting_approval",
+      statusReason: undefined,
+    });
   }
 
   async resume(workflowId: string): Promise<WorkflowInstance> {
@@ -124,25 +166,41 @@ export class WorkflowService {
     const pending = this.store.getPendingApproval(workflowId);
     const workItem = this.getWorkItem(workflow.workItemId);
 
-    if (!pending || pending.stage !== "plan") {
-      throw new Error("Workflow is not waiting on plan approval");
+    if (!pending || !["plan", "implement", "repair"].includes(pending.stage)) {
+      throw new Error("Workflow is not waiting on a resumable approval");
     }
 
     this.store.updateApproval(pending.id, "approved", "Approved via run resume");
 
-    workflow = this.store.updateWorkflowInstance(workflow.id, { stage: "implement", status: "running" });
-    workflow = await this.runStage(workflow, workItem, "implement");
-    if (isFailureStatus(workflow.status)) {
-      return workflow;
+    if (pending.stage === "plan") {
+      workflow = this.store.updateWorkflowInstance(workflow.id, {
+        stage: "implement",
+        status: "running",
+        statusReason: undefined,
+      });
+      workflow = await this.runStage(workflow, workItem, "implement");
+      if (shouldStopProgress(workflow)) {
+        return workflow;
+      }
+    } else {
+      workflow = this.store.updateWorkflowInstance(workflow.id, {
+        stage: pending.stage,
+        status: "running",
+        statusReason: undefined,
+      });
     }
 
     workflow = await this.runVerifyReviewRepairLoop(workflow, workItem);
-    if (isFailureStatus(workflow.status)) {
+    if (shouldStopProgress(workflow)) {
       return workflow;
     }
 
     this.store.createApproval({ workflowInstanceId: workflow.id, stage: "review" });
-    return this.store.updateWorkflowInstance(workflow.id, { stage: "review", status: "waiting_approval" });
+    return this.store.updateWorkflowInstance(workflow.id, {
+      stage: "review",
+      status: "waiting_approval",
+      statusReason: undefined,
+    });
   }
 
   async reject(workflowId: string, note: string): Promise<WorkflowInstance> {
@@ -159,7 +217,11 @@ export class WorkflowService {
     this.store.updateApproval(pending.id, "rejected", note);
 
     if (pending.stage === "plan") {
-      workflow = this.store.updateWorkflowInstance(workflow.id, { stage: "plan", status: "running" });
+      workflow = this.store.updateWorkflowInstance(workflow.id, {
+        stage: "plan",
+        status: "running",
+        statusReason: undefined,
+      });
       workflow = await this.runStage(workflow, workItem, "plan", {
         summary: `Revise rejected plan for issue #${workItem.externalId}`,
         extraInstructions: [
@@ -171,11 +233,19 @@ export class WorkflowService {
         return workflow;
       }
       this.store.createApproval({ workflowInstanceId: workflow.id, stage: "plan" });
-      return this.store.updateWorkflowInstance(workflow.id, { stage: "plan", status: "waiting_approval" });
+      return this.store.updateWorkflowInstance(workflow.id, {
+        stage: "plan",
+        status: "waiting_approval",
+        statusReason: undefined,
+      });
     }
 
     if (pending.stage === "review") {
-      workflow = this.store.updateWorkflowInstance(workflow.id, { stage: "repair", status: "running" });
+      workflow = this.store.updateWorkflowInstance(workflow.id, {
+        stage: "repair",
+        status: "running",
+        statusReason: undefined,
+      });
       workflow = await this.runStage(workflow, workItem, "repair", {
         summary: `Address rejected review approval for issue #${workItem.externalId}`,
         extraInstructions: [
@@ -183,17 +253,21 @@ export class WorkflowService {
           ...(await this.latestArtifactInstructions(workflow.id, "review-report", "Latest review report")),
         ],
       });
-      if (isFailureStatus(workflow.status)) {
+      if (shouldStopProgress(workflow)) {
         return workflow;
       }
 
       workflow = await this.runVerifyReviewRepairLoop(workflow, workItem);
-      if (isFailureStatus(workflow.status)) {
+      if (shouldStopProgress(workflow)) {
         return workflow;
       }
 
       this.store.createApproval({ workflowInstanceId: workflow.id, stage: "review" });
-      return this.store.updateWorkflowInstance(workflow.id, { stage: "review", status: "waiting_approval" });
+      return this.store.updateWorkflowInstance(workflow.id, {
+        stage: "review",
+        status: "waiting_approval",
+        statusReason: undefined,
+      });
     }
 
     throw new Error(`Reject is not supported for approval stage ${pending.stage}`);
@@ -230,6 +304,7 @@ export class WorkflowService {
       status: "completed",
       prNumber: pr.number,
       prUrl: pr.url,
+      statusReason: undefined,
     });
     await this.runnerClient.cleanupRun(latestAttempt.runnerId);
     return workflow;
@@ -259,7 +334,11 @@ export class WorkflowService {
       throw new Error(`PR #${workflow.prNumber} has no review comments or failing CI checks to repair`);
     }
 
-    workflow = this.store.updateWorkflowInstance(workflow.id, { stage: "repair", status: "running" });
+    workflow = this.store.updateWorkflowInstance(workflow.id, {
+      stage: "repair",
+      status: "running",
+      statusReason: undefined,
+    });
     workflow = await this.runStage(workflow, workItem, "repair", {
       summary: `Repair PR #${pr.number} feedback for issue #${workItem.externalId}`,
       issueBody: [
@@ -277,12 +356,12 @@ export class WorkflowService {
         ...ciFailureLogs.map((failure) => `CI failure in ${failure.check}:\n${failure.log}`),
       ],
     });
-    if (isFailureStatus(workflow.status)) {
+    if (shouldStopProgress(workflow)) {
       return workflow;
     }
 
     workflow = await this.runVerifyReviewRepairLoop(workflow, workItem);
-    if (isFailureStatus(workflow.status)) {
+    if (shouldStopProgress(workflow)) {
       return workflow;
     }
 
@@ -301,7 +380,11 @@ export class WorkflowService {
       pr.reviewComments.flatMap((comment) => (comment.nodeId ? [comment.nodeId] : [])),
     );
     await this.runnerClient.cleanupRun(latestAttempt.runnerId);
-    return this.store.updateWorkflowInstance(workflow.id, { stage: "done", status: "completed" });
+    return this.store.updateWorkflowInstance(workflow.id, {
+      stage: "done",
+      status: "completed",
+      statusReason: undefined,
+    });
   }
 
   listWorkflows(): WorkflowInstance[] {
@@ -312,15 +395,78 @@ export class WorkflowService {
     return this.store.getWorkflowSnapshot(workflowId);
   }
 
-  async cancel(workflowId: string): Promise<WorkflowInstance> {
-    const workflow = this.store.getWorkflowInstance(workflowId);
-    if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
-    const snapshot = this.store.getWorkflowSnapshot(workflow.id);
-    const runningAttempt = [...snapshot.attempts].reverse().find((attempt) => attempt.status === "running");
-    if (runningAttempt) {
-      await this.runnerClient.cancel(runningAttempt.runnerId);
+  getStatusView(workflowId: string): WorkflowStatusView {
+    const snapshot = this.store.getWorkflowSnapshot(workflowId);
+    const pending = this.store.getPendingApproval(workflowId);
+    const artifacts: StatusArtifactMap = {};
+    for (const artifact of snapshot.artifacts) {
+      artifacts[artifact.kind] = artifact.path;
     }
-    return this.store.updateWorkflowInstance(workflow.id, { status: "cancelled" });
+
+    const latestResult = [...snapshot.tasks]
+      .reverse()
+      .map((task) => {
+        const result = this.store.getTaskResult(task.id);
+        return result
+          ? {
+              taskType: task.type,
+              status: result.result.status,
+              error: result.result.error,
+            }
+          : undefined;
+      })
+      .find((result) => result !== undefined);
+
+    return {
+      workflowId: snapshot.workflow.id,
+      issue: {
+        externalId: snapshot.workItem.externalId,
+        title: snapshot.workItem.title,
+        url: snapshot.workItem.url,
+      },
+      stage: snapshot.workflow.stage,
+      status: snapshot.workflow.status,
+      approvalPending: Boolean(pending),
+      approvalStage: pending?.stage,
+      statusReason: snapshot.workflow.statusReason,
+      artifacts,
+      latestResult,
+      approvalHistory: snapshot.approvals.map((approval) => ({
+        stage: approval.stage,
+        status: approval.status,
+        note: approval.note,
+      })),
+      nextAction: this.nextAction(snapshot.workflow, pending),
+    };
+  }
+
+  async cancel(workflowId: string): Promise<WorkflowInstance> {
+    let workflow = this.store.getWorkflowInstance(workflowId);
+    if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+    if (workflow.status !== "running") {
+      return workflow;
+    }
+
+    let snapshot = this.store.getWorkflowSnapshot(workflow.id);
+    const runningAttempt = [...snapshot.attempts].reverse().find((attempt) => attempt.status === "running");
+    if (!runningAttempt) {
+      return workflow;
+    }
+
+    await this.runnerClient.cancel(runningAttempt.runnerId);
+
+    workflow = this.store.getWorkflowInstance(workflowId) ?? workflow;
+    snapshot = this.store.getWorkflowSnapshot(workflow.id);
+    const stillRunning = workflow.status === "running"
+      && snapshot.attempts.some((attempt) => attempt.status === "running");
+    if (!stillRunning) {
+      return workflow;
+    }
+
+    return this.store.updateWorkflowInstance(workflow.id, {
+      status: "cancelled",
+      statusReason: "Cancelled by operator.",
+    });
   }
 
   private upsertIssue(issue: GitHubIssue): WorkItem {
@@ -417,15 +563,23 @@ export class WorkflowService {
     workItem: WorkItem,
   ): Promise<WorkflowInstance> {
     while (true) {
-      workflow = this.store.updateWorkflowInstance(workflow.id, { stage: "verify", status: "running" });
+      workflow = this.store.updateWorkflowInstance(workflow.id, {
+        stage: "verify",
+        status: "running",
+        statusReason: undefined,
+      });
       workflow = await this.runStage(workflow, workItem, "verify");
-      if (isFailureStatus(workflow.status)) {
+      if (shouldStopProgress(workflow)) {
         return workflow;
       }
 
-      workflow = this.store.updateWorkflowInstance(workflow.id, { stage: "review", status: "running" });
+      workflow = this.store.updateWorkflowInstance(workflow.id, {
+        stage: "review",
+        status: "running",
+        statusReason: undefined,
+      });
       workflow = await this.runStage(workflow, workItem, "review");
-      if (isFailureStatus(workflow.status)) {
+      if (shouldStopProgress(workflow)) {
         return workflow;
       }
 
@@ -438,12 +592,14 @@ export class WorkflowService {
         return this.store.updateWorkflowInstance(workflow.id, {
           stage: "repair",
           status: "failed",
+          statusReason: `Repair loop exceeded max rounds (${this.config.repair.max_rounds}).`,
         });
       }
 
       workflow = this.store.updateWorkflowInstance(workflow.id, {
         stage: "repair",
         status: "running",
+        statusReason: undefined,
         repairRound: workflow.repairRound + 1,
       });
       workflow = await this.runStage(workflow, workItem, "repair", {
@@ -453,7 +609,7 @@ export class WorkflowService {
           ...(await this.latestArtifactInstructions(workflow.id, "verification-report", "Latest verification report")),
         ],
       });
-      if (isFailureStatus(workflow.status)) {
+      if (shouldStopProgress(workflow)) {
         return workflow;
       }
     }
@@ -536,6 +692,7 @@ export class WorkflowService {
       executor,
       constraints: {
         maxIterations: this.config.runner.max_iterations,
+        timeoutSec: this.config.budget.stage_wall_time_minutes * 60,
         verifyCommands: stage === "verify" ? this.config.verify.commands : undefined,
       },
       context: {
@@ -580,10 +737,177 @@ export class WorkflowService {
       return this.store.updateWorkflowInstance(workflow.id, {
         stage,
         status: result.status === "cancelled" ? "cancelled" : "failed",
+        statusReason: result.error?.message,
       });
     }
 
+    const gatedWorkflow = this.enforceReviewPolicy(workflow, stage, metadata.workspacePath);
+    if (gatedWorkflow) {
+      return gatedWorkflow;
+    }
+
     return this.store.getWorkflowInstance(workflow.id) ?? workflow;
+  }
+
+  private enforceReviewPolicy(
+    workflow: WorkflowInstance,
+    stage: WorkflowTaskType,
+    workspacePath: string,
+  ): WorkflowInstance | null {
+    if (stage !== "implement" && stage !== "repair") {
+      return null;
+    }
+
+    const changedFiles = this.readChangedFiles(workflow, workspacePath);
+    if (changedFiles.length === 0) {
+      return null;
+    }
+    const patchBytes = this.readPatchBytes(workflow, workspacePath);
+
+    if (changedFiles.length > this.config.review.run_max_changed_files) {
+      return this.store.updateWorkflowInstance(workflow.id, {
+        stage,
+        status: "failed",
+        statusReason: `Changed files (${changedFiles.length}) exceed review.run_max_changed_files (${this.config.review.run_max_changed_files}). Manual intervention required.`,
+      });
+    }
+
+    if (patchBytes > this.config.review.run_max_patch_bytes) {
+      return this.store.updateWorkflowInstance(workflow.id, {
+        stage,
+        status: "failed",
+        statusReason: `Patch size (${patchBytes} bytes) exceeds review.run_max_patch_bytes (${this.config.review.run_max_patch_bytes}). Manual intervention required.`,
+      });
+    }
+
+    if (changedFiles.length > this.config.review.max_changed_files) {
+      this.store.createApproval({
+        workflowInstanceId: workflow.id,
+        stage,
+        note: `Changed files (${changedFiles.length}) exceed review.max_changed_files (${this.config.review.max_changed_files}). Inspect the diff and artifacts before continuing.`,
+      });
+      return this.store.updateWorkflowInstance(workflow.id, {
+        stage,
+        status: "waiting_approval",
+        statusReason: `Changed files (${changedFiles.length}) exceed review.max_changed_files (${this.config.review.max_changed_files}). Manual approval required before continuing.`,
+      });
+    }
+
+    if (patchBytes > this.config.review.max_patch_bytes) {
+      this.store.createApproval({
+        workflowInstanceId: workflow.id,
+        stage,
+        note: `Patch size (${patchBytes} bytes) exceeds review.max_patch_bytes (${this.config.review.max_patch_bytes}). Inspect the diff and artifacts before continuing.`,
+      });
+      return this.store.updateWorkflowInstance(workflow.id, {
+        stage,
+        status: "waiting_approval",
+        statusReason: `Patch size (${patchBytes} bytes) exceeds review.max_patch_bytes (${this.config.review.max_patch_bytes}). Manual approval required before continuing.`,
+      });
+    }
+
+    return null;
+  }
+
+  private readChangedFiles(workflow: WorkflowInstance, workspacePath: string): string[] {
+    const markerPath = join(workspacePath, ".devagent-changed-files.json");
+    if (existsSync(markerPath)) {
+      const raw = readFileSync(markerPath, "utf-8");
+      return [...new Set((JSON.parse(raw) as string[]).filter(Boolean))];
+    }
+
+    const candidates: Array<{ cwd: string; args: string[] }> = [
+      {
+        cwd: workspacePath,
+        args: ["diff", "--name-only", workflow.baseSha],
+      },
+      {
+        cwd: this.project.repoRoot,
+        args: ["diff", "--name-only", workflow.baseSha, workflow.branch],
+      },
+    ];
+
+    for (const candidate of candidates) {
+      if (!existsSync(join(candidate.cwd, ".git"))) {
+        continue;
+      }
+      try {
+        const output = execFileSync("git", candidate.args, {
+          cwd: candidate.cwd,
+          encoding: "utf-8",
+        }).trim();
+        if (!output) {
+          continue;
+        }
+        return [...new Set(output.split("\n").map((line) => line.trim()).filter(Boolean))];
+      } catch {
+        // Try the next strategy.
+      }
+    }
+
+    return [];
+  }
+
+  private readPatchBytes(workflow: WorkflowInstance, workspacePath: string): number {
+    const markerPath = join(workspacePath, ".devagent-patch-bytes.txt");
+    if (existsSync(markerPath)) {
+      const raw = Number.parseInt(readFileSync(markerPath, "utf-8").trim(), 10);
+      return Number.isFinite(raw) ? raw : 0;
+    }
+
+    const candidates: Array<{ cwd: string; args: string[] }> = [
+      {
+        cwd: workspacePath,
+        args: ["diff", "--binary", workflow.baseSha],
+      },
+      {
+        cwd: this.project.repoRoot,
+        args: ["diff", "--binary", workflow.baseSha, workflow.branch],
+      },
+    ];
+
+    for (const candidate of candidates) {
+      if (!existsSync(join(candidate.cwd, ".git"))) {
+        continue;
+      }
+      try {
+        const output = execFileSync("git", candidate.args, {
+          cwd: candidate.cwd,
+          encoding: "utf-8",
+          maxBuffer: 10 * 1024 * 1024,
+        });
+        return Buffer.byteLength(output, "utf-8");
+      } catch {
+        // Try the next strategy.
+      }
+    }
+
+    return 0;
+  }
+
+  private nextAction(
+    workflow: WorkflowInstance,
+    pending: ReturnType<CanonicalStore["getPendingApproval"]>,
+  ): string {
+    if (pending?.stage === "plan") {
+      return `Review plan.md, then run 'devagent-hub run resume ${workflow.id}' or 'devagent-hub run reject ${workflow.id} --note \"...\"'.`;
+    }
+    if (pending?.stage === "review") {
+      return `Review verification-report.md and review-report.md, then run 'devagent-hub pr open ${workflow.id}' or 'devagent-hub run reject ${workflow.id} --note \"...\"'.`;
+    }
+    if (pending?.stage === "implement" || pending?.stage === "repair") {
+      return `Inspect the diff and latest artifacts, then run 'devagent-hub run resume ${workflow.id}' to continue or 'devagent-hub run cancel ${workflow.id}' to stop.`;
+    }
+    if (workflow.status === "failed") {
+      return "Inspect the latest result and status reason before retrying or starting a fresh workflow.";
+    }
+    if (workflow.status === "completed") {
+      return workflow.prUrl ? `Workflow is complete. Review the PR at ${workflow.prUrl}.` : "Workflow is complete.";
+    }
+    if (workflow.status === "cancelled") {
+      return "Workflow is cancelled. Start a new run if more changes are needed.";
+    }
+    return "Workflow is running. Re-run 'devagent-hub status <workflow-id>' to refresh progress.";
   }
 
   private formatReviewComment(comment: { body: string; path?: string; line?: number; startLine?: number }): string {

@@ -79,6 +79,12 @@ export interface WorkflowConfig {
     path_overrides: Record<string, string[]>;
   };
   verify: { commands: string[] };
+  review: {
+    max_changed_files: number;
+    run_max_changed_files: number;
+    max_patch_bytes: number;
+    run_max_patch_bytes: number;
+  };
   pr: { draft: boolean; open_requires: string[] };
   repair: { max_rounds: number };
   handoff: { when: string[] };
@@ -137,6 +143,12 @@ export function defaultConfig(): WorkflowConfig {
       },
     },
     verify: { commands: ["bun run test", "bun run typecheck"] },
+    review: {
+      max_changed_files: 20,
+      run_max_changed_files: 30,
+      max_patch_bytes: 30_000,
+      run_max_patch_bytes: 60_000,
+    },
     pr: { draft: true, open_requires: ["verify"] },
     repair: { max_rounds: 3 },
     handoff: { when: ["repair_failed", "review_rejected"] },
@@ -197,6 +209,30 @@ export function validateConfig(config: WorkflowConfig): void {
   if (config.repair.max_rounds < 0) {
     throw new WorkflowConfigError(
       `repair.max_rounds must be >= 0, got ${config.repair.max_rounds}`,
+    );
+  }
+
+  if (config.review.max_changed_files < 0) {
+    throw new WorkflowConfigError(
+      `review.max_changed_files must be >= 0, got ${config.review.max_changed_files}`,
+    );
+  }
+
+  if (config.review.run_max_changed_files < 0) {
+    throw new WorkflowConfigError(
+      `review.run_max_changed_files must be >= 0, got ${config.review.run_max_changed_files}`,
+    );
+  }
+
+  if (config.review.max_patch_bytes < 0) {
+    throw new WorkflowConfigError(
+      `review.max_patch_bytes must be >= 0, got ${config.review.max_patch_bytes}`,
+    );
+  }
+
+  if (config.review.run_max_patch_bytes < 0) {
+    throw new WorkflowConfigError(
+      `review.run_max_patch_bytes must be >= 0, got ${config.review.run_max_patch_bytes}`,
     );
   }
 

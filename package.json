@@ -6,10 +6,11 @@
     "devagent-hub": "dist/cli/index.js"
   },
   "scripts": {
-    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external react-devtools-core",
+    "build": "bunx tsc -p tsconfig.json",
     "test": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "typecheck": "bunx tsc --noEmit",
     "lint": "bunx eslint src/",
+    "bootstrap:local": "bun run scripts/bootstrap-local.ts",
     "baseline:check": "bun run scripts/baseline/check-baseline.ts",
     "baseline:drift": "bun run scripts/baseline/check-protocol-drift.ts",
     "baseline:compat": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts src/__tests__/baseline-compatibility.test.ts",

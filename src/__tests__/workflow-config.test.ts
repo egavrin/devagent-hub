@@ -40,6 +40,7 @@ Some description here.
     expect(cfg.runner.max_iterations).toBe(5);
     expect(cfg.verify.commands).toEqual(["npm test", "npm run lint"]);
     expect(cfg.repair.max_rounds).toBe(7);
+    expect(cfg.review).toEqual(defaultConfig().review);
   });
 
   it("parses mode field", () => {
@@ -195,5 +196,16 @@ describe("validateConfig", () => {
 
   it("defaults mode to assisted", () => {
     expect(defaultConfig().mode).toBe("assisted");
+  });
+
+  it("rejects negative review patch limits", () => {
+    const cfg = {
+      ...defaultConfig(),
+      review: {
+        ...defaultConfig().review,
+        max_patch_bytes: -1,
+      },
+    };
+    expect(() => validateConfig(cfg)).toThrow(WorkflowConfigError);
   });
 });
