@@ -9,7 +9,11 @@
     "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external react-devtools-core",
     "test": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "typecheck": "bunx tsc --noEmit",
-    "lint": "bunx eslint src/"
+    "lint": "bunx eslint src/",
+    "baseline:check": "bun run scripts/baseline/check-baseline.ts",
+    "baseline:drift": "bun run scripts/baseline/check-protocol-drift.ts",
+    "baseline:compat": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts src/__tests__/baseline-compatibility.test.ts",
+    "baseline:smoke": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts src/__tests__/baseline-machine-path.test.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -28,6 +32,7 @@
     "@devagent-runner/adapters": "file:../devagent-runner/packages/adapters",
     "@devagent-runner/local-runner": "file:../devagent-runner/packages/local-runner",
     "@devagent-sdk/types": "file:../devagent-sdk/packages/types",
+    "@devagent-sdk/validation": "file:../devagent-sdk/packages/validation",
     "ink": "^6.8.0",
     "ink-text-input": "^6.0.0",
     "react": "^19.2.4",

@@ -102,3 +102,15 @@ project add -> issue sync -> run start -> run resume -> pr open
 That path has unit coverage for canonical persistence, workflow progression, approval pause/resume,
 runner event ingestion, rejection/replan behavior, post-PR repair behavior, PR handoff, and the
 canonical TUI views.
+
+The pinned release-candidate baseline is recorded in [baseline.json](/Users/eg/Documents/devagent-hub/baseline.json),
+and the operator checklist lives in [BASELINE_VALIDATION.md](/Users/eg/Documents/devagent-hub/BASELINE_VALIDATION.md).
+
+Additional baseline commands:
+
+```bash
+bun run baseline:check
+bun run baseline:drift
+bun run baseline:compat
+bun run baseline:smoke
+```

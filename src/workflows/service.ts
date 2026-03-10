@@ -2,10 +2,16 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { GitHubGateway } from "../github/gateway.js";
 import type { GitHubIssue } from "../github/types.js";
+import {
+  branchExists,
+  loadBaselineManifest,
+  readBranchHead,
+  readCurrentBaselineSystemSnapshot,
+} from "../baseline/manifest.js";
 import type { WorkflowConfig } from "../workflow/config.js";
 import { resolveSkills } from "../workflow/skill-resolver.js";
 import { CanonicalStore } from "../persistence/canonical-store.js";
-import type { Project, WorkItem, WorkflowInstance } from "../canonical/types.js";
+import type { Project, WorkItem, WorkflowBaselineSnapshot, WorkflowInstance } from "../canonical/types.js";
 import type {
   ArtifactKind,
   ExecutorSpec,
@@ -15,6 +21,7 @@ import type {
 } from "@devagent-sdk/types";
 import { PROTOCOL_VERSION } from "@devagent-sdk/types";
 import type { RunnerClient } from "../runner-client/types.js";
+import { WorkflowStateError } from "./errors.js";
 
 type StageContextOverrides = {
   summary?: string;
@@ -83,12 +90,16 @@ export class WorkflowService {
   async start(issueExternalId: string): Promise<WorkflowInstance> {
     const workItem = await this.ensureIssue(issueExternalId);
     const branch = `devagent/workflow/${workItem.externalId}-${randomUUID().slice(0, 8)}`;
+    const baselineSnapshot = this.captureBaselineSnapshot("main");
     let workflow = this.store.createWorkflowInstance({
       projectId: this.project.id,
       workItemId: workItem.id,
       stage: "triage",
       status: "running",
       branch,
+      baseBranch: baselineSnapshot.targetBranch,
+      baseSha: baselineSnapshot.targetBaseSha,
+      baselineSnapshot,
     });
 
     workflow = await this.runStage(workflow, workItem, "triage");
@@ -109,6 +120,7 @@ export class WorkflowService {
   async resume(workflowId: string): Promise<WorkflowInstance> {
     let workflow = this.store.getWorkflowInstance(workflowId);
     if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+    this.assertWorkflowContinuationSafe(workflow);
     const pending = this.store.getPendingApproval(workflowId);
     const workItem = this.getWorkItem(workflow.workItemId);
 
@@ -136,6 +148,7 @@ export class WorkflowService {
   async reject(workflowId: string, note: string): Promise<WorkflowInstance> {
     let workflow = this.store.getWorkflowInstance(workflowId);
     if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+    this.assertWorkflowContinuationSafe(workflow);
     const pending = this.store.getPendingApproval(workflowId);
     const workItem = this.getWorkItem(workflow.workItemId);
 
@@ -189,6 +202,7 @@ export class WorkflowService {
   async openPr(workflowId: string): Promise<WorkflowInstance> {
     let workflow = this.store.getWorkflowInstance(workflowId);
     if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+    this.assertWorkflowContinuationSafe(workflow);
     const pending = this.store.getPendingApproval(workflowId);
     if (!pending || pending.stage !== "review") {
       throw new Error("Workflow is not waiting on final approval");
@@ -207,7 +221,7 @@ export class WorkflowService {
       title: workItem.title,
       body: `Closes #${workItem.externalId}`,
       head: branch,
-      base: "main",
+      base: workflow.baseBranch,
       draft: this.config.pr.draft,
     });
 
@@ -224,6 +238,7 @@ export class WorkflowService {
   async repairPr(workflowId: string): Promise<WorkflowInstance> {
     let workflow = this.store.getWorkflowInstance(workflowId);
     if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+    this.assertWorkflowContinuationSafe(workflow);
     if (!workflow.prNumber) {
       throw new Error("Workflow does not have an opened PR");
     }
@@ -231,6 +246,12 @@ export class WorkflowService {
     const workItem = this.getWorkItem(workflow.workItemId);
     const prNumber = workflow.prNumber;
     const pr = await this.github.fetchPR(this.project.repoFullName, prNumber);
+    if (pr.head !== workflow.branch) {
+      throw new WorkflowStateError(
+        "HISTORICAL_RUN_REQUIRES_MANUAL_INTERVENTION",
+        `Workflow ${workflow.id} is pinned to branch ${workflow.branch}, but PR #${prNumber} now points to ${pr.head}`,
+      );
+    }
     const ciFailureLogs = await this.github.fetchCIFailureLogs(this.project.repoFullName, prNumber);
     const changedFilesHint = [...new Set(pr.reviewComments.flatMap((comment) => (comment.path ? [comment.path] : [])))];
 
@@ -319,6 +340,64 @@ export class WorkflowService {
     const workItem = this.store.getWorkItem(id);
     if (!workItem) throw new Error(`Work item ${id} not found`);
     return workItem;
+  }
+
+  private captureBaselineSnapshot(baseBranch: string): WorkflowBaselineSnapshot {
+    const manifest = loadBaselineManifest();
+    const current = readCurrentBaselineSystemSnapshot(manifest);
+    const expected = manifest.repos;
+
+    if (
+      current.protocolVersion !== manifest.protocolVersion ||
+      current.sdkSha !== expected["devagent-sdk"].sha ||
+      current.runnerSha !== expected["devagent-runner"].sha ||
+      current.devagentSha !== expected["devagent"].sha ||
+      current.hubSha !== expected["devagent-hub"].sha
+    ) {
+      throw new WorkflowStateError(
+        "STALE_BASELINE",
+        "Current workspace no longer matches the pinned baseline manifest. Refresh all four repos to the recorded baseline before starting a new validation workflow.",
+      );
+    }
+
+    return {
+      targetBranch: baseBranch,
+      targetBaseSha: readBranchHead(this.project.repoRoot, baseBranch),
+      system: current,
+    };
+  }
+
+  private assertWorkflowContinuationSafe(workflow: WorkflowInstance): void {
+    const manifest = loadBaselineManifest();
+    const current = readCurrentBaselineSystemSnapshot(manifest);
+    const expected = workflow.baselineSnapshot.system;
+    if (
+      current.protocolVersion !== expected.protocolVersion ||
+      current.sdkSha !== expected.sdkSha ||
+      current.runnerSha !== expected.runnerSha ||
+      current.devagentSha !== expected.devagentSha ||
+      current.hubSha !== expected.hubSha
+    ) {
+      throw new WorkflowStateError(
+        "STALE_BASELINE",
+        `Workflow ${workflow.id} was started on baseline ${JSON.stringify(expected)}, but the current workspace has drifted to ${JSON.stringify(current)}.`,
+      );
+    }
+
+    const currentBaseSha = readBranchHead(this.project.repoRoot, workflow.baseBranch);
+    if (currentBaseSha !== workflow.baseSha) {
+      throw new WorkflowStateError(
+        "STALE_BRANCH_REF",
+        `Workflow ${workflow.id} expects ${workflow.baseBranch}@${workflow.baseSha}, but the current branch head is ${currentBaseSha}.`,
+      );
+    }
+
+    if (!branchExists(this.project.repoRoot, workflow.branch)) {
+      throw new WorkflowStateError(
+        "STALE_BRANCH_REF",
+        `Workflow ${workflow.id} expects local branch ${workflow.branch}, but it no longer exists.`,
+      );
+    }
   }
 
   private resolveExecutor(stage: WorkflowTaskType): ExecutorSpec {
@@ -450,8 +529,8 @@ export class WorkflowService {
       },
       workspace: {
         sourceRepoPath: this.project.repoRoot,
-        baseRef: "main",
-        workBranch: this.store.getWorkflowBranch(workflow.id),
+        baseRef: workflow.baseSha,
+        workBranch: workflow.branch,
         isolation: "git-worktree",
         readOnly: stage === "review",
       },

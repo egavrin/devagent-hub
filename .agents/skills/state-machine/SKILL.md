@@ -1,15 +1,28 @@
+---
+name: state-machine
+description: Review and modify the canonical workflow/task/approval state machine without breaking staged orchestration.
+---
+
 # State Machine
 
-The workflow orchestrator (`src/workflow/orchestrator.ts`) manages run lifecycle through a strict state machine enforced by `assertTransition()` in `src/state/store.ts`.
+The canonical workflow state lives in `src/workflows/service.ts`, `src/canonical/types.ts`, and
+`src/persistence/canonical-store.ts`.
 
-## Valid states
+## Current workflow stages
 
-`triaging → planning → plan_review → plan_revision → implementing → verifying → reviewing → repairing → done | failed | escalated`
+`triage -> plan -> implement -> verify -> review -> repair -> done`
+
+Workflow status is tracked separately:
+
+`queued | running | waiting_approval | failed | completed | cancelled`
 
 ## Rules
 
-- Every status change must go through `store.updateStatus(runId, newStatus)` which calls `assertTransition()`.
-- Never set status directly on the DB — always use the store method.
+- Keep workflow state changes inside `WorkflowService`.
+- Persist all workflow/task/attempt/approval changes through `CanonicalStore`.
+- Do not mutate persisted state ad hoc in the CLI or TUI.
+- Preserve the hard checkpoints after `plan` and before PR creation.
+- If you change stage progression, update the workflow tests in `src/__tests__/workflow-service.test.ts`.
 - The `plan_revision` status enables rework loops: `plan_review → plan_revision → planning → plan_review`.
 - Terminal states (`done`, `failed`, `escalated`) cannot transition further.
 - `escalated` is used by autopilot when risk thresholds are exceeded.

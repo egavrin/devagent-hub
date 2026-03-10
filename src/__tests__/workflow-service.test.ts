@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -5,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CanonicalStore } from "../persistence/canonical-store.js";
 import { defaultConfig } from "../workflow/config.js";
 import { WorkflowService } from "../workflows/service.js";
+import { WorkflowStateError } from "../workflows/errors.js";
 import type { GitHubGateway } from "../github/gateway.js";
 import type { GitHubCheck, GitHubComment, GitHubIssue, GitHubPR } from "../github/types.js";
 import type { RunnerClient } from "../runner-client/types.js";
@@ -16,6 +18,27 @@ async function createTempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
   paths.push(dir);
   return dir;
+}
+
+function git(repoRoot: string, args: string[]): void {
+  execFileSync("git", args, {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Codex",
+      GIT_AUTHOR_EMAIL: "codex@example.com",
+      GIT_COMMITTER_NAME: "Codex",
+      GIT_COMMITTER_EMAIL: "codex@example.com",
+    },
+    stdio: "ignore",
+  });
+}
+
+async function initializeRepo(repoRoot: string): Promise<void> {
+  await writeFile(join(repoRoot, "README.md"), "# repo\n");
+  git(repoRoot, ["init", "--initial-branch=main"]);
+  git(repoRoot, ["add", "README.md"]);
+  git(repoRoot, ["commit", "-m", "test: seed repo"]);
 }
 
 async function writeSkill(repoRoot: string, name: string): Promise<void> {
@@ -44,6 +67,7 @@ class StubGitHubGateway implements GitHubGateway {
   public readonly resolvedThreads: Array<{ repo: string; prNumber: number; nodeIds: string[] }> = [];
   public reviewComments: GitHubComment[] = [];
   public ciFailureLogs: Array<{ check: string; log: string }> = [];
+  public prHead = "devagent/workflow/test-branch";
 
   constructor(private readonly issue: GitHubIssue) {}
 
@@ -61,6 +85,7 @@ class StubGitHubGateway implements GitHubGateway {
 
   async createPR(repo: string, params: { head: string }): Promise<GitHubPR> {
     this.createdPrs.push({ repo, head: params.head });
+    this.prHead = params.head;
     return {
       number: 10,
       title: "PR",
@@ -83,7 +108,7 @@ class StubGitHubGateway implements GitHubGateway {
       url: "https://github.com/org/repo/pull/10",
       state: "open",
       draft: true,
-      head: "devagent/workflow/test-branch",
+      head: this.prHead,
       base: "main",
       checks: [],
       reviewComments: this.reviewComments,
@@ -137,6 +162,7 @@ class StubRunnerClient implements RunnerClient {
 
   async startTask(request: TaskExecutionRequest): Promise<{ runId: string }> {
     const runId = `${request.taskType}-${request.taskId}`;
+    git(this.repoRoot, ["branch", "-f", request.workspace.workBranch, "main"]);
     this.requests.set(runId, request);
     this.startedRequests.push(request);
     return { runId };
@@ -260,6 +286,7 @@ class BlockingCancelRunnerClient implements RunnerClient {
 
   async startTask(request: TaskExecutionRequest): Promise<{ runId: string }> {
     const runId = `${request.taskType}-${request.taskId}`;
+    git(this.repoRoot, ["branch", "-f", request.workspace.workBranch, "main"]);
     this.requests.set(runId, request);
     const deferred = Promise.withResolvers<TaskExecutionResult>();
     this.deferred.set(runId, { resolve: deferred.resolve, result: deferred.promise });
@@ -346,6 +373,7 @@ async function createService(reviewSequence: string[] = ["No defects found."]) {
   const dbPath = join(root, "state.db");
   const repoRoot = join(root, "repo");
   await mkdir(repoRoot, { recursive: true });
+  await initializeRepo(repoRoot);
   const store = new CanonicalStore(dbPath);
   const project = store.upsertProject({
     id: "org/repo",
@@ -433,6 +461,42 @@ describe("WorkflowService", () => {
     expect(snapshot.tasks.map((task) => task.type)).toEqual(["triage", "plan", "plan"]);
     expect(snapshot.approvals.map((approval) => approval.status)).toEqual(["rejected", "pending"]);
     expect(runner.startedRequests.at(-1)?.context.extraInstructions?.join("\n")).toContain("Expand the rollback plan");
+
+    store.close();
+  });
+
+  it("fails resume when the stored baseline snapshot no longer matches the current pinned baseline", async () => {
+    const { store, service } = await createService();
+    const started = await service.start("42");
+    const stale = store.updateWorkflowInstance(started.id, {
+      baselineSnapshot: {
+        ...started.baselineSnapshot,
+        system: {
+          ...started.baselineSnapshot.system,
+          devagentSha: "stale-devagent-sha",
+        },
+      },
+    });
+
+    await expect(service.resume(stale.id)).rejects.toMatchObject({
+      code: "STALE_BASELINE",
+      name: "WorkflowStateError",
+    } satisfies Partial<WorkflowStateError>);
+
+    store.close();
+  });
+
+  it("fails resume when the recorded base branch SHA has drifted", async () => {
+    const { store, service } = await createService();
+    const started = await service.start("42");
+    const stale = store.updateWorkflowInstance(started.id, {
+      baseSha: "deadbeef",
+    });
+
+    await expect(service.resume(stale.id)).rejects.toMatchObject({
+      code: "STALE_BRANCH_REF",
+      name: "WorkflowStateError",
+    } satisfies Partial<WorkflowStateError>);
 
     store.close();
   });
@@ -590,6 +654,24 @@ describe("WorkflowService", () => {
     store.close();
   });
 
+  it("fails PR repair when the PR head no longer matches the workflow branch", async () => {
+    const { store, service, github } = await createService([
+      "No defects found.",
+      "No defects found.",
+    ]);
+    const started = await service.start("42");
+    await service.resume(started.id);
+    await service.openPr(started.id);
+    github.prHead = "pre-rewrite/legacy-branch";
+
+    await expect(service.repairPr(started.id)).rejects.toMatchObject({
+      code: "HISTORICAL_RUN_REQUIRES_MANUAL_INTERVENTION",
+      name: "WorkflowStateError",
+    } satisfies Partial<WorkflowStateError>);
+
+    store.close();
+  });
+
   it("uses changed file hints for path-scoped skills during PR repair", async () => {
     const { store, service, github, runner } = await createService([
       "No defects found.",
@@ -628,6 +710,7 @@ describe("WorkflowService", () => {
     const dbPath = join(root, "state.db");
     const repoRoot = join(root, "repo");
     await mkdir(repoRoot, { recursive: true });
+    await initializeRepo(repoRoot);
     const store = new CanonicalStore(dbPath);
     const project = store.upsertProject({
       id: "org/repo",

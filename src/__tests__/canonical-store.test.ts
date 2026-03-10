@@ -44,6 +44,19 @@ describe("CanonicalStore", () => {
       stage: "triage",
       status: "running",
       branch: "devagent/workflow/42-test",
+      baseBranch: "main",
+      baseSha: "abc123",
+      baselineSnapshot: {
+        targetBranch: "main",
+        targetBaseSha: "abc123",
+        system: {
+          protocolVersion: "0.1",
+          sdkSha: "sdk",
+          runnerSha: "runner",
+          devagentSha: "devagent",
+          hubSha: "hub",
+        },
+      },
     });
     const task = store.createTask({
       workflowInstanceId: workflow.id,
@@ -104,6 +117,8 @@ describe("CanonicalStore", () => {
     expect(snapshot.events).toHaveLength(1);
     expect(snapshot.artifacts).toHaveLength(1);
     expect(snapshot.results).toHaveLength(1);
+    expect(snapshot.workflow.baseSha).toBe("abc123");
+    expect(snapshot.workflow.baselineSnapshot.system.protocolVersion).toBe("0.1");
 
     store.close();
   });
@@ -133,6 +148,19 @@ describe("CanonicalStore", () => {
       stage: "plan",
       status: "waiting_approval",
       branch: "devagent/workflow/99-test",
+      baseBranch: "main",
+      baseSha: "def456",
+      baselineSnapshot: {
+        targetBranch: "main",
+        targetBaseSha: "def456",
+        system: {
+          protocolVersion: "0.1",
+          sdkSha: "sdk",
+          runnerSha: "runner",
+          devagentSha: "devagent",
+          hubSha: "hub",
+        },
+      },
     });
     store.createApproval({ workflowInstanceId: workflow.id, stage: "plan" });
     store.close();
@@ -140,6 +168,7 @@ describe("CanonicalStore", () => {
     const reopened = new CanonicalStore(dbPath);
     const snapshot = reopened.getWorkflowSnapshot(workflow.id);
     expect(snapshot.workflow.status).toBe("waiting_approval");
+    expect(snapshot.workflow.branch).toBe("devagent/workflow/99-test");
     expect(snapshot.approvals).toHaveLength(1);
     reopened.close();
   });

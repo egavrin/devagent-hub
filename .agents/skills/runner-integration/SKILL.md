@@ -1,15 +1,22 @@
+---
+name: runner-integration
+description: Work on Hub-to-Runner integration through the canonical SDK request/event/result path.
+---
+
 # Runner Integration
 
-All stage executors must implement `RunnerAdapter` from `src/runner/runner-adapter.ts`:
+Hub does not launch executors directly. It creates SDK requests and submits them through
+`src/runner-client/local-runner-client.ts`.
 
-```typescript
-interface RunnerAdapter {
-  readonly id: string;     // unique key, e.g. "opencode", "claude", "codex"
-  readonly name: string;   // human-readable
-  launch(params: LaunchParams): LaunchResult | Promise<LaunchResult>;
-  describe(): RunnerCapabilities | null;
-}
-```
+## Rules
+
+- Executor selection belongs in `WorkflowService.resolveExecutor()`.
+- Hub only knows `ExecutorSpec`, `TaskExecutionRequest`, `TaskExecutionEvent`, and `TaskExecutionResult`.
+- Workspace lifecycle and executor CLI wiring stay in `devagent-runner`.
+- If you change request generation or event/result handling, update:
+  - `src/__tests__/baseline-compatibility.test.ts`
+  - `src/__tests__/baseline-machine-path.test.ts`
+  - `src/__tests__/workflow-service.test.ts`
 
 ## Rules
 

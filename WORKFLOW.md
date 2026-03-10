@@ -108,6 +108,17 @@ Hub exposes these operator actions on top of the staged workflow:
   - review comments are passed to the repair task with file and line context when GitHub provides them
   - `verify.commands` should mirror the repo's real local CI-equivalent checks; do not point them at commands that are known to fail in a runner worktree
 
+## Baseline Safety
+
+Hub records the pinned baseline snapshot when a workflow starts:
+
+- target repo base branch and base SHA
+- pinned system SHAs for `devagent-sdk`, `devagent-runner`, `devagent`, and `devagent-hub`
+- protocol version
+
+On `run resume`, `pr open`, and `pr repair`, Hub compares the stored snapshot with the current
+workspace state and fails explicitly if the workflow is stale or historical.
+
 ## Repair Loop
 
 If the latest `review-report` does not say `No defects found.`, Hub treats the review as blocking

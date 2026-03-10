@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { join } from "node:path";
 import { LocalRunner } from "@devagent-runner/local-runner";
 import {
   ClaudeAdapter,
@@ -7,15 +7,25 @@ import {
   OpenCodeAdapter,
 } from "@devagent-runner/adapters";
 import type { TaskExecutionEvent, TaskExecutionRequest, TaskExecutionResult } from "@devagent-sdk/types";
+import { loadBaselineManifest, resolveBaselineRepoPath, resolveWorkspaceRoot } from "../baseline/manifest.js";
 import type { RunnerClient } from "./types.js";
 
 export class LocalRunnerClient implements RunnerClient {
   private readonly runner: LocalRunner;
 
-  constructor(devagentCliPath = resolve(process.cwd(), "..", "devagent", "packages", "cli", "dist", "index.js")) {
+  constructor(devagentCliPath?: string) {
+    const manifest = loadBaselineManifest();
+    const workspaceRoot = resolveWorkspaceRoot();
+    const resolvedDevagentCliPath = devagentCliPath ?? join(
+      resolveBaselineRepoPath("devagent", workspaceRoot),
+      "packages",
+      "cli",
+      "dist",
+      "index.js",
+    );
     this.runner = new LocalRunner({
       adapters: [
-        new DevAgentAdapter(`bun ${devagentCliPath}`),
+        new DevAgentAdapter(`bun ${resolvedDevagentCliPath}`),
         new CodexAdapter(),
         new ClaudeAdapter(),
         new OpenCodeAdapter(),

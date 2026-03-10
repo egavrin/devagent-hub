@@ -1,0 +1,88 @@
+name: Baseline Validation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: devagent-hub
+
+      - id: manifest
+        name: Read baseline manifest
+        working-directory: devagent-hub
+        run: |
+          echo "sdk_sha=$(jq -r '.repos[\"devagent-sdk\"].sha' baseline.json)" >> "$GITHUB_OUTPUT"
+          echo "runner_sha=$(jq -r '.repos[\"devagent-runner\"].sha' baseline.json)" >> "$GITHUB_OUTPUT"
+          echo "devagent_sha=$(jq -r '.repos[\"devagent\"].sha' baseline.json)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: egavrin/devagent-sdk
+          ref: ${{ steps.manifest.outputs.sdk_sha }}
+          path: devagent-sdk
+
+      - uses: actions/checkout@v4
+        with:
+          repository: egavrin/devagent-runner
+          ref: ${{ steps.manifest.outputs.runner_sha }}
+          path: devagent-runner
+
+      - uses: actions/checkout@v4
+        with:
+          repository: egavrin/devagent
+          ref: ${{ steps.manifest.outputs.devagent_sha }}
+          path: devagent
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+
+      - name: Install SDK dependencies
+        working-directory: devagent-sdk
+        run: bun install
+
+      - name: Build SDK packages
+        working-directory: devagent-sdk
+        run: bun run build
+
+      - name: Install runner dependencies
+        working-directory: devagent-runner
+        run: bun install
+
+      - name: Build runner packages
+        working-directory: devagent-runner
+        run: bun run build
+
+      - name: Install devagent dependencies
+        working-directory: devagent
+        run: bun install
+
+      - name: Build devagent
+        working-directory: devagent
+        run: bun run build
+
+      - name: Install hub dependencies
+        working-directory: devagent-hub
+        run: bun install
+
+      - name: Check pinned baseline
+        working-directory: devagent-hub
+        run: bun run baseline:check
+
+      - name: Check protocol drift
+        working-directory: devagent-hub
+        run: bun run baseline:drift
+
+      - name: Validate compatibility
+        working-directory: devagent-hub
+        run: bun run baseline:compat
+
+      - name: Validate machine path
+        working-directory: devagent-hub
+        run: bun run baseline:smoke

@@ -36,6 +36,19 @@ async function createStore(): Promise<CanonicalStore> {
     stage: "plan",
     status: "waiting_approval",
     branch: "devagent/workflow/42-test",
+    baseBranch: "main",
+    baseSha: "abc123",
+    baselineSnapshot: {
+      targetBranch: "main",
+      targetBaseSha: "abc123",
+      system: {
+        protocolVersion: "0.1",
+        sdkSha: "sdk",
+        runnerSha: "runner",
+        devagentSha: "devagent",
+        hubSha: "hub",
+      },
+    },
   });
   return store;
 }

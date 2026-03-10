@@ -1,15 +1,33 @@
+---
+name: testing
+description: Verify Hub changes with canonical-store, workflow-service, baseline, and TUI tests.
+---
+
 # Testing
 
-Tests use `bun test` (vitest-compatible). All test files are in `src/__tests__/`.
+Hub tests run through Vitest. Most coverage lives in `src/__tests__/`.
 
 ## Conventions
 
-- Import from `vitest`: `describe, it, expect, beforeEach, afterEach`.
-- Use `MockRunLauncher` from `src/runner/mock-launcher.ts` for launcher stubs — set responses per phase via `setResponse(phase, { exitCode, output })`.
-- Use `MockGitHubGateway` from `src/github/mock-gateway.ts` for GitHub stubs — seed issues via `seedIssue(repo, issue)`.
-- Use `MockReviewGate` returning `{ action: "proceed", reason: "Auto-pass" }` for gate stubs.
-- Create temp SQLite DBs in `tmpdir()` with unique names: `hub-<test>-${Date.now()}.db`. Clean up in `afterEach`.
-- Store creates tables on construction — no setup needed beyond `new StateStore(dbPath)`.
+- Import test helpers from `vitest`.
+- Use temp SQLite DBs and clean them up in `afterEach`.
+- Exercise orchestration through `WorkflowService`, not through ad hoc store mutation.
+- Prefer the canonical-path tests:
+  - `workflow-service.test.ts`
+  - `canonical-store.test.ts`
+  - `baseline-compatibility.test.ts`
+  - `baseline-machine-path.test.ts`
+  - `tui.test.tsx`
+
+## Verification
+
+Run the same checks the repo documents:
+
+```bash
+node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts
+bunx tsc --noEmit
+bun run build
+```
 
 ## Mock output format
 

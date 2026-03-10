@@ -9,7 +9,6 @@ import { GhCliGateway } from "../github/gh-cli-gateway.js";
 import { loadWorkflowConfig } from "../workflow/config.js";
 import { LocalRunnerClient } from "../runner-client/local-runner-client.js";
 import { WorkflowService } from "../workflows/service.js";
-import { renderTui } from "../tui/index.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "devagent-hub");
 const DB_PATH = join(CONFIG_DIR, "state.db");
@@ -25,6 +24,18 @@ function detectRepoRoot(): string {
 }
 
 function detectRepoFullName(): string {
+  try {
+    const remoteUrl = execFileSync("git", ["remote", "get-url", "origin"], {
+      encoding: "utf-8",
+    }).trim();
+    const httpsMatch = remoteUrl.match(/github\.com[/:]([^/]+\/[^/.]+)(?:\.git)?$/);
+    if (httpsMatch?.[1]) {
+      return httpsMatch[1];
+    }
+  } catch {
+    // Fall back to gh CLI when origin is unavailable or unparsable.
+  }
+
   const raw = execFileSync("gh", ["repo", "view", "--json", "nameWithOwner"], {
     encoding: "utf-8",
   });
@@ -238,6 +249,7 @@ if (command === "tui") {
   const screen = (argValue(args, "--screen") ?? "runs") as "inbox" | "runs" | "detail" | "settings";
   const workflowId = argValue(args, "--workflow");
   const { store } = createService();
+  const { renderTui } = await import("../tui/index.js");
   await renderTui(store, screen, workflowId).waitUntilExit();
   store.close();
   process.exit(0);

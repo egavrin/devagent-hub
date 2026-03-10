@@ -1,15 +1,27 @@
+---
+name: security-checklist
+description: Review Hub and Runner changes for command safety, secret handling, and unsafe workflow continuation.
+---
+
 # Security Checklist
 
 When reviewing code changes, verify:
 
-## Command injection
-- No unsanitized user input in `execFileSync`/`execSync`/`spawn` arguments.
-- Runner prompts use `JSON.stringify()` for dynamic data, never string interpolation into shell commands.
-- `repoPath` and `runId` are used as file paths, not shell arguments.
+## Command safety
+
+- No unsanitized user input is passed into `execFileSync`, `exec`, `spawn`, or shell strings.
+- Repo paths, task ids, workflow ids, and branch names are treated as data, not shell fragments.
+- Dynamic prompt or request content is written to files or JSON payloads, not interpolated into shell commands.
 
 ## Secret handling
-- API keys come from env vars, never hardcoded.
-- `resolveEnv()` in LauncherFactory selectively passes only needed env vars.
+
+- Credentials come from `gh`, env vars, or local auth stores, never hardcoded.
+- Logs and artifacts do not capture access tokens or other secrets.
+
+## Workflow safety
+
+- Resume/open/repair paths verify the recorded baseline and branch expectations before continuing.
+- Historical or stale runs fail loudly instead of silently continuing on the wrong branch or commit.
 - Artifact files may contain prompt content — don't log full artifacts to stdout.
 - `.env` files must not be committed.
 

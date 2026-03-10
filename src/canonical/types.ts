@@ -4,6 +4,20 @@ import type {
   WorkflowTaskType,
 } from "@devagent-sdk/types";
 
+export type BaselineSystemSnapshot = {
+  protocolVersion: string;
+  sdkSha: string;
+  runnerSha: string;
+  devagentSha: string;
+  hubSha: string;
+};
+
+export type WorkflowBaselineSnapshot = {
+  targetBranch: string;
+  targetBaseSha: string;
+  system: BaselineSystemSnapshot;
+};
+
 export type Project = {
   id: string;
   name: string;
@@ -33,6 +47,10 @@ export type WorkflowInstance = {
   repairRound: number;
   prNumber?: number;
   prUrl?: string;
+  branch: string;
+  baseBranch: string;
+  baseSha: string;
+  baselineSnapshot: WorkflowBaselineSnapshot;
   createdAt: string;
   updatedAt: string;
 };

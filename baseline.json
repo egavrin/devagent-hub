@@ -1,0 +1,29 @@
+{
+  "protocolVersion": "0.1",
+  "repos": {
+    "devagent-sdk": {
+      "name": "devagent-sdk",
+      "url": "https://github.com/egavrin/devagent-sdk",
+      "branch": "main",
+      "sha": "4ccf388c3f4a33f361435c80cb6f161495d479cf"
+    },
+    "devagent-runner": {
+      "name": "devagent-runner",
+      "url": "https://github.com/egavrin/devagent-runner",
+      "branch": "main",
+      "sha": "dc54c670cfc8f754f3994ea17e0ae75ec9fa470c"
+    },
+    "devagent": {
+      "name": "devagent",
+      "url": "https://github.com/egavrin/devagent",
+      "branch": "main",
+      "sha": "ca0f5a3e362f6bbf730df7bc179f69afd792001c"
+    },
+    "devagent-hub": {
+      "name": "devagent-hub",
+      "url": "https://github.com/egavrin/devagent-hub",
+      "branch": "main",
+      "sha": "57ca5b1e1dd67f64dc2e6c03f0f169f7ec486daa"
+    }
+  }
+}

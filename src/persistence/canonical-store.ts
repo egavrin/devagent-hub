@@ -8,6 +8,7 @@ import type {
   Project,
   Task,
   WorkItem,
+  WorkflowBaselineSnapshot,
   WorkflowInstance,
 } from "../canonical/types.js";
 import type { ArtifactRef, TaskExecutionEvent, TaskExecutionResult, WorkflowTaskType } from "@devagent-sdk/types";
@@ -42,9 +43,12 @@ CREATE TABLE IF NOT EXISTS workflow_instances (
   repair_round INTEGER NOT NULL,
   pr_number INTEGER,
   pr_url TEXT,
+  branch TEXT NOT NULL,
+  base_branch TEXT NOT NULL,
+  base_sha TEXT NOT NULL,
+  baseline_snapshot_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  branch TEXT NOT NULL
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -104,6 +108,14 @@ function now(): string {
   return new Date().toISOString();
 }
 
+function serializeBaselineSnapshot(snapshot: WorkflowBaselineSnapshot): string {
+  return JSON.stringify(snapshot);
+}
+
+function deserializeBaselineSnapshot(raw: string): WorkflowBaselineSnapshot {
+  return JSON.parse(raw) as WorkflowBaselineSnapshot;
+}
+
 export class CanonicalStore {
   private readonly db: Database.Database;
 
@@ -125,6 +137,31 @@ export class CanonicalStore {
     }
     if (!names.has("pr_url")) {
       this.db.exec("ALTER TABLE workflow_instances ADD COLUMN pr_url TEXT");
+    }
+    if (!names.has("branch")) {
+      this.db.exec("ALTER TABLE workflow_instances ADD COLUMN branch TEXT NOT NULL DEFAULT 'devagent/workflow/unknown'");
+    }
+    if (!names.has("base_branch")) {
+      this.db.exec("ALTER TABLE workflow_instances ADD COLUMN base_branch TEXT NOT NULL DEFAULT 'main'");
+    }
+    if (!names.has("base_sha")) {
+      this.db.exec("ALTER TABLE workflow_instances ADD COLUMN base_sha TEXT NOT NULL DEFAULT ''");
+    }
+    if (!names.has("baseline_snapshot_json")) {
+      const fallback: WorkflowBaselineSnapshot = {
+        targetBranch: "main",
+        targetBaseSha: "",
+        system: {
+          protocolVersion: "0.1",
+          sdkSha: "",
+          runnerSha: "",
+          devagentSha: "",
+          hubSha: "",
+        },
+      };
+      this.db.exec(
+        `ALTER TABLE workflow_instances ADD COLUMN baseline_snapshot_json TEXT NOT NULL DEFAULT '${serializeBaselineSnapshot(fallback).replace(/'/g, "''")}'`,
+      );
     }
   }
 
@@ -243,6 +280,9 @@ export class CanonicalStore {
     stage: WorkflowInstance["stage"];
     status: WorkflowInstance["status"];
     branch: string;
+    baseBranch: string;
+    baseSha: string;
+    baselineSnapshot: WorkflowBaselineSnapshot;
   }): WorkflowInstance {
     const workflow: WorkflowInstance = {
       id: randomUUID(),
@@ -251,12 +291,19 @@ export class CanonicalStore {
       stage: input.stage,
       status: input.status,
       repairRound: 0,
+      branch: input.branch,
+      baseBranch: input.baseBranch,
+      baseSha: input.baseSha,
+      baselineSnapshot: input.baselineSnapshot,
       createdAt: now(),
       updatedAt: now(),
     };
     this.db.prepare(`
-      INSERT INTO workflow_instances (id, project_id, work_item_id, stage, status, repair_round, pr_number, pr_url, created_at, updated_at, branch)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO workflow_instances (
+        id, project_id, work_item_id, stage, status, repair_round, pr_number, pr_url,
+        branch, base_branch, base_sha, baseline_snapshot_json, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       workflow.id,
       workflow.projectId,
@@ -266,9 +313,12 @@ export class CanonicalStore {
       workflow.repairRound,
       workflow.prNumber ?? null,
       workflow.prUrl ?? null,
+      workflow.branch,
+      workflow.baseBranch,
+      workflow.baseSha,
+      serializeBaselineSnapshot(workflow.baselineSnapshot),
       workflow.createdAt,
       workflow.updatedAt,
-      input.branch,
     );
     return workflow;
   }
@@ -279,9 +329,21 @@ export class CanonicalStore {
     const next = { ...current, ...patch, updatedAt: now() };
     this.db.prepare(`
       UPDATE workflow_instances
-      SET stage = ?, status = ?, repair_round = ?, pr_number = ?, pr_url = ?, updated_at = ?
+      SET stage = ?, status = ?, repair_round = ?, pr_number = ?, pr_url = ?, branch = ?, base_branch = ?, base_sha = ?, baseline_snapshot_json = ?, updated_at = ?
       WHERE id = ?
-    `).run(next.stage, next.status, next.repairRound, next.prNumber ?? null, next.prUrl ?? null, next.updatedAt, id);
+    `).run(
+      next.stage,
+      next.status,
+      next.repairRound,
+      next.prNumber ?? null,
+      next.prUrl ?? null,
+      next.branch,
+      next.baseBranch,
+      next.baseSha,
+      serializeBaselineSnapshot(next.baselineSnapshot),
+      next.updatedAt,
+      id,
+    );
     return next;
   }
 
@@ -296,6 +358,10 @@ export class CanonicalStore {
       repairRound: row.repair_round,
       prNumber: row.pr_number ?? undefined,
       prUrl: row.pr_url ?? undefined,
+      branch: row.branch,
+      baseBranch: row.base_branch,
+      baseSha: row.base_sha,
+      baselineSnapshot: deserializeBaselineSnapshot(row.baseline_snapshot_json),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     } : undefined;
@@ -317,6 +383,10 @@ export class CanonicalStore {
       repairRound: row.repair_round,
       prNumber: row.pr_number ?? undefined,
       prUrl: row.pr_url ?? undefined,
+      branch: row.branch,
+      baseBranch: row.base_branch,
+      baseSha: row.base_sha,
+      baselineSnapshot: deserializeBaselineSnapshot(row.baseline_snapshot_json),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
