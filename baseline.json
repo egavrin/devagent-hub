@@ -17,13 +17,13 @@
       "name": "devagent",
       "url": "https://github.com/egavrin/devagent",
       "branch": "main",
-      "sha": "364791894cbf9b83291f4d6ecc3717f2b7da534a"
+      "sha": "18b5e4224b9acd49f4510a64ec483df48047242a"
     },
     "devagent-hub": {
       "name": "devagent-hub",
       "url": "https://github.com/egavrin/devagent-hub",
       "branch": "main",
-      "sha": "b8e4bd0c98a1c03967c016a31d6af66a46041578"
+      "sha": "eb5598605694ce3f6c5f1d5bf586635a4f3657aa"
     }
   }
 }
