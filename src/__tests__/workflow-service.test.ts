@@ -68,6 +68,7 @@ class StubGitHubGateway implements GitHubGateway {
   public reviewComments: GitHubComment[] = [];
   public ciFailureLogs: Array<{ check: string; log: string }> = [];
   public prHead = "devagent/workflow/test-branch";
+  public pushFailuresRemaining = 0;
 
   constructor(private readonly issue: GitHubIssue) {}
 
@@ -124,6 +125,10 @@ class StubGitHubGateway implements GitHubGateway {
   }
 
   async pushBranch(repoPath: string, branch: string): Promise<void> {
+    if (this.pushFailuresRemaining > 0) {
+      this.pushFailuresRemaining -= 1;
+      throw new Error("simulated push failure");
+    }
     this.pushedBranches.push({ repoPath, branch });
   }
 
@@ -389,6 +394,7 @@ async function createService(
   options: {
     changedFilesByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], string[]>>;
     patchBytesByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], number>>;
+    githubPushFailures?: number;
   } = {},
 ) {
   const root = await createTempDir("devagent-hub-service-");
@@ -417,6 +423,7 @@ async function createService(
     comments: [],
   };
   const github = new StubGitHubGateway(issue);
+  github.pushFailuresRemaining = options.githubPushFailures ?? 0;
   const runner = new StubRunnerClient(
     repoRoot,
     [...reviewSequence],
@@ -740,6 +747,32 @@ describe("WorkflowService", () => {
     const reviewArtifact = snapshot.artifacts.find((artifact) => artifact.kind === "review-report");
     expect(reviewArtifact).toBeTruthy();
     expect(await readFile(reviewArtifact!.path, "utf-8")).toContain("No defects found");
+
+    store.close();
+  });
+
+  it("retries PR open after approval was already persisted", async () => {
+    const { store, service, github, runner } = await createService(["No defects found."], {
+      githubPushFailures: 1,
+    });
+    const started = await service.start("42");
+    await service.resume(started.id);
+
+    await expect(service.openPr(started.id)).rejects.toThrow("simulated push failure");
+    const stuck = service.getSnapshot(started.id);
+    expect(stuck.workflow.status).toBe("waiting_approval");
+    expect(stuck.workflow.prNumber).toBeUndefined();
+    expect(stuck.approvals.at(-1)?.stage).toBe("review");
+    expect(stuck.approvals.at(-1)?.status).toBe("approved");
+
+    const reopened = await service.openPr(started.id);
+
+    expect(reopened.status).toBe("completed");
+    expect(reopened.stage).toBe("done");
+    expect(reopened.prNumber).toBe(10);
+    expect(github.createdPrs).toHaveLength(1);
+    expect(github.pushedBranches).toHaveLength(1);
+    expect(runner.cleanedRuns).toHaveLength(1);
 
     store.close();
   });

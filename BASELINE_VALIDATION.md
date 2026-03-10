@@ -61,9 +61,9 @@ to match the pinned manifest exactly.
 
 ## Reliability Happy Path
 
-The standard assisted workflow is our reliability validation path.
+The standard assisted path is the reliability happy path.
 
-Use this validated executor profile for that path:
+Validated executor profile for this path:
 
 - executor: `devagent`
 - provider: `chatgpt`

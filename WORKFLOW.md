@@ -127,8 +127,7 @@ When the workflow pauses on `plan`, use:
 devagent-hub status <workflow-id>
 ```
 
-`status` prints the latest artifact paths. Open the printed `plan.md` path directly, review the printed `plan.md` path, then
-either:
+`status` prints the latest artifact paths. Open the printed `plan.md` path directly, review it, then either:
 
 ```bash
 devagent-hub run resume <workflow-id>
