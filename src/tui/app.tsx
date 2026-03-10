@@ -22,6 +22,8 @@ import { useActions } from "./hooks/use-actions.js";
 import { uiReducer, initialUIState } from "./state.js";
 import type { DetailTab } from "./state.js";
 
+const brokenValidationAssignment: number = "broken";
+
 interface AppProps {
   store: StateStore;
   registry: ProcessRegistry;
