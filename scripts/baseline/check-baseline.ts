@@ -1,7 +1,12 @@
 #!/usr/bin/env bun
 
 import { loadBaselineManifest, readBaselineRepoStatuses, resolveHubRoot, resolveWorkspaceRoot } from "../../src/baseline/manifest.js";
-import { assert } from "../../src/baseline/test-helpers.js";
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
 
 const manifest = loadBaselineManifest(resolveHubRoot());
 const statuses = readBaselineRepoStatuses(manifest, resolveWorkspaceRoot(resolveHubRoot()));

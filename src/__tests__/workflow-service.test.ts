@@ -288,8 +288,11 @@ class BlockingCancelRunnerClient implements RunnerClient {
     const runId = `${request.taskType}-${request.taskId}`;
     git(this.repoRoot, ["branch", "-f", request.workspace.workBranch, "main"]);
     this.requests.set(runId, request);
-    const deferred = Promise.withResolvers<TaskExecutionResult>();
-    this.deferred.set(runId, { resolve: deferred.resolve, result: deferred.promise });
+    let resolveResult!: (result: TaskExecutionResult) => void;
+    const result = new Promise<TaskExecutionResult>((resolve) => {
+      resolveResult = resolve;
+    });
+    this.deferred.set(runId, { resolve: resolveResult, result });
     return { runId };
   }
 
