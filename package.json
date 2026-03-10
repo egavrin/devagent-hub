@@ -29,8 +29,10 @@
     "vitest": "^3.0.0"
   },
   "dependencies": {
+    "@devagent-runner/core": "file:../devagent-runner/packages/core",
     "@devagent-runner/adapters": "file:../devagent-runner/packages/adapters",
     "@devagent-runner/local-runner": "file:../devagent-runner/packages/local-runner",
+    "@devagent-sdk/schema": "file:../devagent-sdk/packages/schema",
     "@devagent-sdk/types": "file:../devagent-sdk/packages/types",
     "@devagent-sdk/validation": "file:../devagent-sdk/packages/validation",
     "ink": "^6.8.0",

@@ -26,6 +26,12 @@ jobs:
           ref: main
           path: devagent-runner
 
+      - uses: actions/checkout@v4
+        with:
+          repository: egavrin/devagent
+          ref: main
+          path: devagent
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.10"
@@ -44,6 +50,14 @@ jobs:
 
       - name: Build runner packages
         working-directory: devagent-runner
+        run: bun run build
+
+      - name: Install devagent dependencies
+        working-directory: devagent
+        run: bun install
+
+      - name: Build devagent
+        working-directory: devagent
         run: bun run build
 
       - name: Install hub dependencies

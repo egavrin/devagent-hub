@@ -43,6 +43,10 @@ jobs:
         with:
           bun-version: "1.3.10"
 
+      - name: Check pinned baseline
+        working-directory: devagent-hub
+        run: bun run baseline:check
+
       - name: Install SDK dependencies
         working-directory: devagent-sdk
         run: bun install
@@ -70,10 +74,6 @@ jobs:
       - name: Install hub dependencies
         working-directory: devagent-hub
         run: bun install
-
-      - name: Check pinned baseline
-        working-directory: devagent-hub
-        run: bun run baseline:check
 
       - name: Check protocol drift
         working-directory: devagent-hub
