@@ -480,7 +480,7 @@ describe("WorkflowService", () => {
   });
 
   it("resumes through implement, verify, review and pauses before PR", async () => {
-    const { store, service } = await createService();
+    const { store, service, runner } = await createService();
     const started = await service.start("42");
     const resumed = await service.resume(started.id);
 
@@ -489,6 +489,9 @@ describe("WorkflowService", () => {
     const snapshot = service.getSnapshot(started.id);
     expect(snapshot.tasks.map((task) => task.type)).toEqual(["triage", "plan", "implement", "verify", "review"]);
     expect(snapshot.approvals.at(-1)?.stage).toBe("review");
+    const implementRequest = runner.startedRequests.find((request) => request.taskType === "implement");
+    expect(implementRequest?.context.extraInstructions?.join("\n")).toContain("Accepted plan:");
+    expect(implementRequest?.context.extraInstructions?.join("\n")).toContain("Implementation steps");
 
     store.close();
   });
