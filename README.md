@@ -158,8 +158,9 @@ devagent-hub run reject <workflow-id> --note "expand rollback notes and split mi
 
 How feedback is used:
 
-- a rejected `plan` note becomes input to the next `plan` attempt
-- the rerun pauses again so a human can re-review the updated plan
+- rejecting `plan` makes the note input to the next `plan` attempt
+- Hub reruns `plan`
+- the workflow pauses again on `plan` so a human can re-review the updated plan
 
 Use `status --json` only for scripts or external tooling. The default text output is the intended
 operator view.
@@ -194,12 +195,13 @@ devagent-hub run reject <workflow-id> --note "address security concerns before P
 
 How feedback is used:
 
-- a rejected final approval note becomes input to the next `repair`
-- Hub then reruns `repair -> verify -> review` and pauses again
+- rejecting final pre-PR approval makes the note input to the next `repair`
+- Hub reruns `repair -> verify -> review`
+- the workflow pauses again before PR handoff
 
 ## Post-PR Feedback
 
-For an already-open PR, use:
+`devagent-hub pr repair <workflow-id>` is only for an already-open PR. Use:
 
 ```bash
 devagent-hub pr repair <workflow-id>
