@@ -5,7 +5,7 @@
       "name": "devagent-sdk",
       "url": "https://github.com/egavrin/devagent-sdk",
       "branch": "main",
-      "sha": "8a3181d4b49bcc575cba85556d30f4de0ccb7be4"
+      "sha": "8a3181d43476b302a55ce4f8ada4c6fe000f7fb2"
     },
     "devagent-runner": {
       "name": "devagent-runner",
@@ -17,7 +17,7 @@
       "name": "devagent",
       "url": "https://github.com/egavrin/devagent",
       "branch": "main",
-      "sha": "34446247c8d7de54d8485d9e94a5d5f8d183d38d"
+      "sha": "3444624cb3cfaf4f4ff2b664df4a0e4f936ff735"
     },
     "devagent-hub": {
       "name": "devagent-hub",
