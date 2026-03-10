@@ -58,6 +58,18 @@ Operator actions:
 For an already-open PR, use `pr repair <workflow-id>` to turn GitHub review comments and failing CI
 logs into a `repair -> verify -> review` cycle on the existing workflow branch.
 
+Baseline safety checks also apply when you continue an existing workflow with `run resume`, `pr open`,
+or `pr repair`. Hub compares the workflow's recorded baseline snapshot against the current workspace
+state and fails fast if:
+
+- the pinned system snapshot changed (`STALE_BASELINE`)
+- the target repo base branch head changed (`STALE_BRANCH_REF`)
+- the workflow branch no longer exists locally (`STALE_BRANCH_REF`)
+- the opened PR no longer points at the workflow branch (`HISTORICAL_RUN_REQUIRES_MANUAL_INTERVENTION`)
+
+When that happens, treat the workflow as stale or historical: refresh the workspace to the recorded
+baseline before starting a new run, or use manual intervention if the PR branch has been rewritten.
+
 ## TUI
 
 The canonical TUI exposes four views:
