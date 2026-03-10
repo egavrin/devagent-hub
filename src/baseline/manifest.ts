@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BaselineSystemSnapshot } from "../canonical/types.js";
@@ -30,7 +30,20 @@ export function resolveHubRoot(): string {
 }
 
 export function resolveWorkspaceRoot(hubRoot = resolveHubRoot()): string {
-  return resolve(hubRoot, "..");
+  const repoNames: BaselineRepoName[] = ["devagent-sdk", "devagent-runner", "devagent", "devagent-hub"];
+  let current = resolve(hubRoot, "..");
+
+  while (true) {
+    if (repoNames.every((repoName) => existsSync(join(current, repoName)))) {
+      return current;
+    }
+
+    const parent = resolve(current, "..");
+    if (parent === current) {
+      return resolve(hubRoot, "..");
+    }
+    current = parent;
+  }
 }
 
 export function baselineManifestPath(hubRoot = resolveHubRoot()): string {
@@ -52,6 +65,20 @@ export function gitStdout(repoPath: string, args: string[]): string {
   return execFileSync("git", args, {
     cwd: repoPath,
     encoding: "utf-8",
+    env: {
+      ...process.env,
+      PATH: [
+        process.env["PATH"] ?? "",
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        "/usr/local/sbin",
+        "/usr/bin",
+        "/usr/sbin",
+        "/bin",
+        "/sbin",
+      ].filter(Boolean).join(":"),
+    },
   }).trim();
 }
 
@@ -68,6 +95,20 @@ export function branchExists(repoPath: string, branch: string): boolean {
     execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
       cwd: repoPath,
       stdio: "ignore",
+      env: {
+        ...process.env,
+        PATH: [
+          process.env["PATH"] ?? "",
+          "/opt/homebrew/bin",
+          "/opt/homebrew/sbin",
+          "/usr/local/bin",
+          "/usr/local/sbin",
+          "/usr/bin",
+          "/usr/sbin",
+          "/bin",
+          "/sbin",
+        ].filter(Boolean).join(":"),
+      },
     });
     return true;
   } catch {
