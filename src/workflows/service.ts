@@ -657,6 +657,10 @@ export class WorkflowService {
     stage: WorkflowTaskType,
     overrides: StageContextOverrides = {},
   ): Promise<WorkflowInstance> {
+    const extraInstructions = [...(overrides.extraInstructions ?? [])];
+    if (stage === "implement") {
+      extraInstructions.push(...(await this.latestArtifactInstructions(workflow.id, "plan", "Accepted plan")));
+    }
     const executor = this.resolveExecutor(stage);
     const task = this.store.createTask({
       workflowInstanceId: workflow.id,
@@ -701,7 +705,7 @@ export class WorkflowService {
         comments: overrides.comments,
         changedFilesHint: overrides.changedFilesHint,
         skills: resolveSkills(this.config, stage, overrides.changedFilesHint),
-        extraInstructions: overrides.extraInstructions,
+        extraInstructions: extraInstructions.length > 0 ? extraInstructions : undefined,
       },
       expectedArtifacts: [artifactKindForStage(stage)],
     };
