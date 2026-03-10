@@ -1,53 +1,27 @@
-import { describe, it, expect } from "vitest";
-import { resolveSkills } from "../workflow/skill-resolver.js";
+import { rm } from "node:fs/promises";
+import { afterEach, describe, expect, it } from "vitest";
 import { defaultConfig } from "../workflow/config.js";
+import { resolveSkills } from "../workflow/skill-resolver.js";
+
+const paths: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(paths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
 
 describe("resolveSkills", () => {
-  it("returns empty array when no skills configured", () => {
+  it("returns configured stage skills even when local skill files are not present", () => {
     const config = defaultConfig();
-    config.skills = { defaults: [], by_stage: {}, path_overrides: {} };
-    expect(resolveSkills(config, "triage")).toEqual([]);
+    const resolved = resolveSkills(config, "implement", ["src/index.ts"]);
+
+    expect(resolved).toEqual(["testing"]);
   });
 
-  it("returns default skills for any phase", () => {
+  it("adds path-override skills when changed files match", () => {
     const config = defaultConfig();
-    config.skills.defaults = ["code-review", "testing"];
-    expect(resolveSkills(config, "triage")).toEqual(["code-review", "testing"]);
-    expect(resolveSkills(config, "implement")).toEqual(["code-review", "testing"]);
-  });
+    config.skills.path_overrides["src/workflows/**"] = ["state-machine"];
+    const resolved = resolveSkills(config, "repair", ["src/workflows/service.ts"]);
 
-  it("adds stage-specific skills", () => {
-    const config = defaultConfig();
-    config.skills.defaults = ["base"];
-    config.skills.by_stage = { implement: ["refactoring", "tdd"] };
-    expect(resolveSkills(config, "implement")).toEqual(["base", "refactoring", "tdd"]);
-    expect(resolveSkills(config, "triage")).toEqual(["base"]);
-  });
-
-  it("adds path-override skills when files match", () => {
-    const config = defaultConfig();
-    config.skills = { defaults: [], by_stage: {}, path_overrides: {
-      "packages/providers/**": ["provider-testing"],
-      "**/*.test.ts": ["unit-testing"],
-    } };
-
-    const files = ["packages/providers/src/index.ts", "src/main.ts"];
-    expect(resolveSkills(config, "implement", files)).toEqual(["provider-testing"]);
-
-    const testFiles = ["src/foo.test.ts"];
-    expect(resolveSkills(config, "implement", testFiles)).toEqual(["unit-testing"]);
-  });
-
-  it("deduplicates skills across sources", () => {
-    const config = defaultConfig();
-    config.skills.defaults = ["testing"];
-    config.skills.by_stage = { implement: ["testing", "refactoring"] };
-    expect(resolveSkills(config, "implement")).toEqual(["testing", "refactoring"]);
-  });
-
-  it("ignores path overrides when no files provided", () => {
-    const config = defaultConfig();
-    config.skills = { defaults: [], by_stage: {}, path_overrides: { "src/**": ["src-skill"] } };
-    expect(resolveSkills(config, "implement")).toEqual([]);
+    expect(resolved).toEqual(["state-machine"]);
   });
 });

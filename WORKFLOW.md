@@ -3,39 +3,34 @@ version: 1
 mode: watch
 
 runner:
+  bin: devagent
+  provider: chatgpt
+  model: gpt-5.4
   approval_mode: full-auto
   max_iterations: 10
 
 profiles:
   default:
     bin: devagent
-  cheap:
-    bin: opencode
-    provider: deepseek
-    model: deepseek-chat
-  strong:
-    bin: claude
-    model: sonnet
-  codex:
-    bin: codex
-    model: gpt-5.3-codex
+    provider: chatgpt
+    model: gpt-5.4
+  reviewer:
+    bin: devagent
+    provider: chatgpt
+    model: gpt-5.4
+  repair:
+    bin: devagent
+    provider: chatgpt
+    model: gpt-5.4
 
 roles:
-  triage: cheap
-  plan: strong
-  implement: strong
+  triage: default
+  plan: default
+  implement: default
   verify: default
-  review: codex
-  gate: strong
-  repair: strong
-
-selection_policy:
-  rules:
-    - phases: [implement]
-      complexity: [large, epic]
-      profile: strong
-    - phases: [triage, gate]
-      profile: cheap
+  review: reviewer
+  repair: repair
+  gate: default
 
 skills:
   defaults: []
@@ -45,56 +40,81 @@ skills:
     review:
       - security-checklist
   path_overrides:
-    "src/runner/**":
-      - runner-integration
-    "src/workflow/**":
+    "src/workflows/**":
       - state-machine
     "src/__tests__/**":
       - testing
 
 verify:
   commands:
-    - bun test
+    - node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts
     - bunx tsc --noEmit
+    - bun run build
 
 pr:
   draft: true
-  open_requires: [verify]
+  open_requires: [review]
 
 repair:
   max_rounds: 3
-
-autopilot:
-  poll_interval_seconds: 120
-  max_concurrent_runs: 2
-  eligible_labels: [devagent]
-  priority_labels: [priority, urgent, critical]
-  exclude_labels: [blocked, wontfix, duplicate]
-  max_complexity: medium
-  min_gate_confidence: 0.7
-  max_changed_files: 20
 ---
 
 # DevAgent Hub Workflow
 
-This file configures the devagent-hub workflow engine.
+`devagent-hub` reads this file from the target repo and preserves these semantics:
 
-## Modes
+- stage-to-profile mapping
+- verify commands
+- repair max rounds
+- skill selection by stage and path
+- PR draft/open rules
 
-- **assisted** — human approves each stage transition
-- **watch** — auto-review gates between stages, human only on blockers
-- **autopilot** — self-discovers issues, prioritizes, runs end-to-end
+Hub resolves the selected profile into an SDK `ExecutorSpec`, submits a `TaskExecutionRequest` to
+`devagent-runner`, and waits for normalized events/results/artifacts. Hub does not shell out to
+executors directly.
 
-## Profiles
+## Recommended Local Validation Profile
 
-| Profile | Runner | Model | Use case |
-|---------|--------|-------|----------|
-| cheap | opencode | deepseek-chat | Fast/cheap: triage, gates |
-| strong | claude | sonnet | Reasoning: plan, implement, repair |
-| codex | codex | gpt-5.3-codex | Cross-model review |
-| default | devagent | (configured) | Verify (shell commands) |
+For the current local environment, use:
 
-## Skills
+```yaml
+runner:
+  bin: devagent
+  provider: chatgpt
+  model: gpt-5.4
+```
 
-Skills are loaded from `.agents/skills/<name>/SKILL.md` and injected into runner prompts.
-Path-override skills activate when changed files match the glob pattern.
+That is the live-validated path for end-to-end issue-to-PR runs through Hub.
+
+## Stage Semantics
+
+- `triage`: produce a triage report
+- `plan`: produce a plan and pause for approval
+- `implement`: modify the workspace
+- `verify`: run `verify.commands`
+- `review`: produce a review report; if it is not clean, Hub enters the repair loop
+- `repair`: apply fixes, then Hub reruns `verify` and `review`
+
+## Human Review Loops
+
+Hub exposes these operator actions on top of the staged workflow:
+
+- `run resume <workflow-id>`: approve the pending plan and continue into implementation
+- `run reject <workflow-id> --note "..."`
+  - if the workflow is waiting on `plan`, Hub reruns `plan` with the human note and pauses again
+  - if the workflow is waiting on `review`, Hub runs `repair -> verify -> review` with the human note and pauses again
+- `pr open <workflow-id>`: approve final handoff and open the PR
+- `pr repair <workflow-id>`: fetch GitHub review comments plus failing CI logs for the opened PR, run `repair -> verify -> review` on the same branch, push updates, and resolve addressed review threads
+  - review comments are passed to the repair task with file and line context when GitHub provides them
+  - `verify.commands` should mirror the repo's real local CI-equivalent checks; do not point them at commands that are known to fail in a runner worktree
+
+## Repair Loop
+
+If the latest `review-report` does not say `No defects found.`, Hub treats the review as blocking
+and runs:
+
+```text
+repair -> verify -> review
+```
+
+until the review is clean or `repair.max_rounds` is reached.

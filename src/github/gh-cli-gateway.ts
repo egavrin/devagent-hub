@@ -311,6 +311,9 @@ export class GhCliGateway implements GitHubGateway {
       user: { login: string };
       body: string;
       created_at: string;
+      path?: string;
+      line?: number;
+      start_line?: number;
     }
     return parseJSON<ApiReviewComment[]>(raw).map((c) => ({
       id: c.id,
@@ -318,6 +321,9 @@ export class GhCliGateway implements GitHubGateway {
       author: c.user.login,
       body: c.body,
       createdAt: c.created_at,
+      path: c.path ?? undefined,
+      line: c.line ?? undefined,
+      startLine: c.start_line ?? undefined,
     }));
   }
 

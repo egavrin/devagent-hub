@@ -31,6 +31,8 @@ export type WorkflowInstance = {
   stage: WorkflowTaskType | "done";
   status: "queued" | "running" | "waiting_approval" | "failed" | "completed" | "cancelled";
   repairRound: number;
+  prNumber?: number;
+  prUrl?: string;
   createdAt: string;
   updatedAt: string;
 };

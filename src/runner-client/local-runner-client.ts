@@ -7,8 +7,9 @@ import {
   OpenCodeAdapter,
 } from "@devagent-runner/adapters";
 import type { TaskExecutionEvent, TaskExecutionRequest, TaskExecutionResult } from "@devagent-sdk/types";
+import type { RunnerClient } from "./types.js";
 
-export class LocalRunnerClient {
+export class LocalRunnerClient implements RunnerClient {
   private readonly runner: LocalRunner;
 
   constructor(devagentCliPath = resolve(process.cwd(), "..", "devagent", "packages", "cli", "dist", "index.js")) {

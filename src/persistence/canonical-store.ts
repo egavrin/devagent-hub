@@ -4,6 +4,7 @@ import type {
   Approval,
   ExecutionAttempt,
   PersistedTaskEvent,
+  PersistedTaskResult,
   Project,
   Task,
   WorkItem,
@@ -39,6 +40,8 @@ CREATE TABLE IF NOT EXISTS workflow_instances (
   stage TEXT NOT NULL,
   status TEXT NOT NULL,
   repair_round INTEGER NOT NULL,
+  pr_number INTEGER,
+  pr_url TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   branch TEXT NOT NULL
@@ -89,6 +92,12 @@ CREATE TABLE IF NOT EXISTS task_artifacts (
   mime_type TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS task_results (
+  task_id TEXT PRIMARY KEY,
+  result_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `;
 
 function now(): string {
@@ -101,10 +110,22 @@ export class CanonicalStore {
   constructor(path: string) {
     this.db = new Database(path);
     this.db.exec(SCHEMA);
+    this.ensureWorkflowColumns();
   }
 
   close(): void {
     this.db.close();
+  }
+
+  private ensureWorkflowColumns(): void {
+    const columns = this.db.prepare("PRAGMA table_info(workflow_instances)").all() as Array<{ name: string }>;
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has("pr_number")) {
+      this.db.exec("ALTER TABLE workflow_instances ADD COLUMN pr_number INTEGER");
+    }
+    if (!names.has("pr_url")) {
+      this.db.exec("ALTER TABLE workflow_instances ADD COLUMN pr_url TEXT");
+    }
   }
 
   upsertProject(project: Project): Project {
@@ -137,6 +158,18 @@ export class CanonicalStore {
       workflowConfigPath: row.workflow_config_path ?? undefined,
       allowedExecutors: JSON.parse(row.allowed_executors_json),
     }));
+  }
+
+  getProject(id: string): Project | undefined {
+    const row = this.db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as any;
+    return row ? {
+      id: row.id,
+      name: row.name,
+      repoRoot: row.repo_root,
+      repoFullName: row.repo_full_name,
+      workflowConfigPath: row.workflow_config_path ?? undefined,
+      allowedExecutors: JSON.parse(row.allowed_executors_json),
+    } : undefined;
   }
 
   upsertWorkItem(workItem: WorkItem): WorkItem {
@@ -190,6 +223,20 @@ export class CanonicalStore {
     }));
   }
 
+  getWorkItem(id: string): WorkItem | undefined {
+    const row = this.db.prepare("SELECT * FROM work_items WHERE id = ?").get(id) as any;
+    return row ? {
+      id: row.id,
+      projectId: row.project_id,
+      kind: row.kind,
+      externalId: row.external_id,
+      title: row.title,
+      state: row.state,
+      labels: JSON.parse(row.labels_json),
+      url: row.url,
+    } : undefined;
+  }
+
   createWorkflowInstance(input: {
     projectId: string;
     workItemId: string;
@@ -208,8 +255,8 @@ export class CanonicalStore {
       updatedAt: now(),
     };
     this.db.prepare(`
-      INSERT INTO workflow_instances (id, project_id, work_item_id, stage, status, repair_round, created_at, updated_at, branch)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO workflow_instances (id, project_id, work_item_id, stage, status, repair_round, pr_number, pr_url, created_at, updated_at, branch)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       workflow.id,
       workflow.projectId,
@@ -217,6 +264,8 @@ export class CanonicalStore {
       workflow.stage,
       workflow.status,
       workflow.repairRound,
+      workflow.prNumber ?? null,
+      workflow.prUrl ?? null,
       workflow.createdAt,
       workflow.updatedAt,
       input.branch,
@@ -230,9 +279,9 @@ export class CanonicalStore {
     const next = { ...current, ...patch, updatedAt: now() };
     this.db.prepare(`
       UPDATE workflow_instances
-      SET stage = ?, status = ?, repair_round = ?, updated_at = ?
+      SET stage = ?, status = ?, repair_round = ?, pr_number = ?, pr_url = ?, updated_at = ?
       WHERE id = ?
-    `).run(next.stage, next.status, next.repairRound, next.updatedAt, id);
+    `).run(next.stage, next.status, next.repairRound, next.prNumber ?? null, next.prUrl ?? null, next.updatedAt, id);
     return next;
   }
 
@@ -245,6 +294,8 @@ export class CanonicalStore {
       stage: row.stage,
       status: row.status,
       repairRound: row.repair_round,
+      prNumber: row.pr_number ?? undefined,
+      prUrl: row.pr_url ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     } : undefined;
@@ -264,6 +315,8 @@ export class CanonicalStore {
       stage: row.stage,
       status: row.status,
       repairRound: row.repair_round,
+      prNumber: row.pr_number ?? undefined,
+      prUrl: row.pr_url ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -470,14 +523,49 @@ export class CanonicalStore {
     }));
   }
 
+  recordResult(taskId: string, result: TaskExecutionResult): void {
+    this.db.prepare(`
+      INSERT INTO task_results (task_id, result_json, created_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(task_id) DO UPDATE SET
+        result_json = excluded.result_json,
+        created_at = excluded.created_at
+    `).run(taskId, JSON.stringify(result), now());
+  }
+
+  getTaskResult(taskId: string): PersistedTaskResult | undefined {
+    const row = this.db.prepare("SELECT * FROM task_results WHERE task_id = ?").get(taskId) as any;
+    return row ? {
+      taskId: row.task_id,
+      result: JSON.parse(row.result_json),
+    } : undefined;
+  }
+
   getWorkflowSnapshot(id: string): {
     workflow: WorkflowInstance;
+    project: Project;
+    workItem: WorkItem;
     tasks: Task[];
+    attempts: ExecutionAttempt[];
+    events: PersistedTaskEvent[];
+    artifacts: ArtifactRef[];
+    results: PersistedTaskResult[];
     approvals: Approval[];
   } {
     const workflow = this.getWorkflowInstance(id);
     if (!workflow) throw new Error(`Workflow ${id} not found`);
+    const project = this.getProject(workflow.projectId);
+    const workItem = this.getWorkItem(workflow.workItemId);
+    if (!project || !workItem) {
+      throw new Error(`Workflow ${id} is missing related records`);
+    }
     const tasks = this.listTasks(id);
+    const attempts = tasks.flatMap((task) => this.listAttempts(task.id));
+    const events = tasks.flatMap((task) => this.listEvents(task.id));
+    const artifacts = tasks.flatMap((task) => this.listArtifacts(task.id));
+    const results = tasks
+      .map((task) => this.getTaskResult(task.id))
+      .filter((result): result is PersistedTaskResult => result !== undefined);
     const approvals = this.db.prepare("SELECT * FROM approvals WHERE workflow_instance_id = ? ORDER BY rowid").all(id).map((row: any) => ({
       id: row.id,
       workflowInstanceId: row.workflow_instance_id,
@@ -485,6 +573,6 @@ export class CanonicalStore {
       status: row.status,
       note: row.note ?? undefined,
     }));
-    return { workflow, tasks, approvals };
+    return { workflow, project, workItem, tasks, attempts, events, artifacts, results, approvals };
   }
 }

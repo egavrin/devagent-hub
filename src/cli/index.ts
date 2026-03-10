@@ -9,6 +9,7 @@ import { GhCliGateway } from "../github/gh-cli-gateway.js";
 import { loadWorkflowConfig } from "../workflow/config.js";
 import { LocalRunnerClient } from "../runner-client/local-runner-client.js";
 import { WorkflowService } from "../workflows/service.js";
+import { renderTui } from "../tui/index.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "devagent-hub");
 const DB_PATH = join(CONFIG_DIR, "state.db");
@@ -69,10 +70,13 @@ Commands:
   issue sync
   run start --issue <number>
   run resume <id>
+  run reject <id> --note <text>
   run cancel <id>
   pr open <id>
+  pr repair <id>
   list
   status <id>
+  tui [--screen inbox|runs|detail|settings] [--workflow <id>]
   help
 `);
 }
@@ -145,6 +149,22 @@ if (command === "run" && subcommand === "resume") {
   process.exit(0);
 }
 
+if (command === "run" && subcommand === "reject") {
+  const workflowId = args[0];
+  const note = argValue(args, "--note");
+  if (!workflowId || !note) {
+    throw new Error("Usage: devagent-hub run reject <id> --note <text>");
+  }
+  const { store, service } = createService();
+  try {
+    const workflow = await service.reject(workflowId, note);
+    console.log(JSON.stringify(workflow, null, 2));
+  } finally {
+    store.close();
+  }
+  process.exit(0);
+}
+
 if (command === "run" && subcommand === "cancel") {
   const workflowId = args[0];
   if (!workflowId) {
@@ -175,6 +195,21 @@ if (command === "pr" && subcommand === "open") {
   process.exit(0);
 }
 
+if (command === "pr" && subcommand === "repair") {
+  const workflowId = args[0];
+  if (!workflowId) {
+    throw new Error("Usage: devagent-hub pr repair <id>");
+  }
+  const { store, service } = createService();
+  try {
+    const workflow = await service.repairPr(workflowId);
+    console.log(JSON.stringify(workflow, null, 2));
+  } finally {
+    store.close();
+  }
+  process.exit(0);
+}
+
 if (command === "list") {
   const { store, service } = createService();
   try {
@@ -196,6 +231,15 @@ if (command === "status") {
   } finally {
     store.close();
   }
+  process.exit(0);
+}
+
+if (command === "tui") {
+  const screen = (argValue(args, "--screen") ?? "runs") as "inbox" | "runs" | "detail" | "settings";
+  const workflowId = argValue(args, "--workflow");
+  const { store } = createService();
+  await renderTui(store, screen, workflowId).waitUntilExit();
+  store.close();
   process.exit(0);
 }
 

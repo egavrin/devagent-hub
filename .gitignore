@@ -10,3 +10,5 @@ dist/
 .DS_Store
 coverage/
 tmp/
+.devagent-runner/
+.live-dist/

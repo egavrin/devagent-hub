@@ -1,28 +1,8 @@
 import React from "react";
 import { render } from "ink";
-import { App } from "./app.js";
-import type { StateStore } from "../state/store.js";
-import type { ProcessRegistry } from "../runner/process-registry.js";
-import type { WorkflowOrchestrator } from "../workflow/orchestrator.js";
-import type { WorkflowConfig } from "../workflow/config.js";
-import type { GitHubGateway } from "../github/gateway.js";
+import type { CanonicalStore } from "../persistence/canonical-store.js";
+import { HubApp, type HubScreen } from "./app.js";
 
-export function launchTUI(deps: {
-  store: StateStore;
-  registry: ProcessRegistry;
-  orchestrator: WorkflowOrchestrator;
-  config?: WorkflowConfig;
-  github?: GitHubGateway;
-  repo?: string;
-}): void {
-  render(
-    <App
-      store={deps.store}
-      registry={deps.registry}
-      orchestrator={deps.orchestrator}
-      config={deps.config}
-      github={deps.github}
-      repo={deps.repo}
-    />
-  );
+export function renderTui(store: CanonicalStore, screen: HubScreen, workflowId?: string) {
+  return render(<HubApp store={store} screen={screen} workflowId={workflowId} />);
 }
