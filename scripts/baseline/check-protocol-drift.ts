@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { repoPath, assert } from "../../src/baseline/test-helpers.js";
 
 const repos = [
@@ -19,26 +19,42 @@ const symbols = [
 for (const repo of repos) {
   for (const symbol of symbols) {
     let output = "";
+    const hasRg = spawnSync("rg", ["--version"], { stdio: "ignore" }).status === 0;
     try {
-      output = execFileSync(
-        "rg",
-        [
-          "-n",
-          `^(?:\\s*export\\s+type\\s+${symbol}\\s*=|\\s*type\\s+${symbol}\\s*=|\\s*export\\s+interface\\s+${symbol}\\b|\\s*interface\\s+${symbol}\\b)`,
-          repo,
-          "--glob",
-          "!**/node_modules/**",
-          "--glob",
-          "!**/dist/**",
-          "--glob",
-          "!**/.git/**",
-          "--glob",
-          "!**/.devagent-runner/**",
-          "--glob",
-          "!**/.live-dist/**",
-        ],
-        { encoding: "utf-8" },
-      ).trim();
+      output = hasRg
+        ? execFileSync(
+            "rg",
+            [
+              "-n",
+              `^(?:\\s*export\\s+type\\s+${symbol}\\s*=|\\s*type\\s+${symbol}\\s*=|\\s*export\\s+interface\\s+${symbol}\\b|\\s*interface\\s+${symbol}\\b)`,
+              repo,
+              "--glob",
+              "!**/node_modules/**",
+              "--glob",
+              "!**/dist/**",
+              "--glob",
+              "!**/.git/**",
+              "--glob",
+              "!**/.devagent-runner/**",
+              "--glob",
+              "!**/.live-dist/**",
+            ],
+            { encoding: "utf-8" },
+          ).trim()
+        : execFileSync(
+            "grep",
+            [
+              "-REn",
+              `^(\\s*export\\s+type\\s+${symbol}\\s*=|\\s*type\\s+${symbol}\\s*=|\\s*export\\s+interface\\s+${symbol}\\b|\\s*interface\\s+${symbol}\\b)`,
+              repo,
+              "--exclude-dir=node_modules",
+              "--exclude-dir=dist",
+              "--exclude-dir=.git",
+              "--exclude-dir=.devagent-runner",
+              "--exclude-dir=.live-dist",
+            ],
+            { encoding: "utf-8" },
+          ).trim();
     } catch (error) {
       const status = (error as { status?: number }).status;
       if (status !== 1) {

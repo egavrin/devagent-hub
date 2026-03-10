@@ -46,7 +46,9 @@ jobs:
 
       - name: Install runner dependencies
         working-directory: devagent-runner
-        run: bun install
+        run: |
+          rm -rf node_modules packages/*/node_modules
+          bun install
 
       - name: Build runner packages
         working-directory: devagent-runner
