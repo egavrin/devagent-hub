@@ -17,6 +17,11 @@ function parseJSON<T>(raw: string): T {
   return JSON.parse(raw) as T;
 }
 
+function logGhCliError(context: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`[gh-cli] ${context}: ${message}\n`);
+}
+
 interface ApiIssue {
   number: number;
   title: string;
@@ -30,28 +35,10 @@ interface ApiIssue {
 
 interface ApiComment {
   id: number;
+  node_id?: string;
   user: { login: string };
   body: string;
   created_at: string;
-}
-
-interface GhIssue {
-  number: number;
-  title: string;
-  body: string;
-  labels: { name: string }[];
-  url: string;
-  state: string;
-  author: { login: string };
-  createdAt: string;
-  comments: GhComment[];
-}
-
-interface GhComment {
-  id: number;
-  author: { login: string };
-  body: string;
-  createdAt: string;
 }
 
 interface GhPR {
@@ -65,32 +52,13 @@ interface GhPR {
   baseRefName: string;
 }
 
-interface GhCheck {
-  name: string;
-  status: string;
-  conclusion: string;
-}
-
-function mapComment(c: GhComment): GitHubComment {
+function mapComment(c: ApiComment): GitHubComment {
   return {
     id: c.id,
-    author: c.author.login,
+    nodeId: c.node_id,
+    author: c.user.login,
     body: c.body,
-    createdAt: c.createdAt,
-  };
-}
-
-function mapIssue(raw: GhIssue): GitHubIssue {
-  return {
-    number: raw.number,
-    title: raw.title,
-    body: raw.body,
-    labels: raw.labels.map((l) => l.name),
-    url: raw.url,
-    state: raw.state.toLowerCase() as "open" | "closed",
-    author: raw.author.login,
-    createdAt: raw.createdAt,
-    comments: (raw.comments ?? []).map(mapComment),
+    createdAt: c.created_at,
   };
 }
 
@@ -99,16 +67,6 @@ function mapPRState(state: string): "open" | "closed" | "merged" {
   if (s === "merged") return "merged";
   if (s === "closed") return "closed";
   return "open";
-}
-
-function mapCheck(c: GhCheck): GitHubCheck {
-  return {
-    name: c.name,
-    status: c.status.toLowerCase() as GitHubCheck["status"],
-    conclusion: c.conclusion
-      ? (c.conclusion.toLowerCase() as GitHubCheck["conclusion"])
-      : null,
-  };
 }
 
 export class GhCliGateway implements GitHubGateway {
@@ -127,12 +85,7 @@ export class GhCliGateway implements GitHubGateway {
       state: issue.state as "open" | "closed",
       author: issue.user.login,
       createdAt: issue.created_at,
-      comments: comments.map((c) => ({
-        id: c.id,
-        author: c.user.login,
-        body: c.body,
-        createdAt: c.created_at,
-      })),
+      comments: comments.map(mapComment),
     };
   }
 
@@ -188,8 +141,11 @@ export class GhCliGateway implements GitHubGateway {
     for (const label of labels) {
       try {
         gh(["api", `repos/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`, "-X", "DELETE"]);
-      } catch {
-        // Label may not exist on issue
+      } catch (error) {
+        logGhCliError(
+          `Failed to remove label "${label}" from issue ${issueNumber} in ${repo}`,
+          error,
+        );
       }
     }
   }
@@ -417,8 +373,11 @@ export class GhCliGateway implements GitHubGateway {
 
       const hasConflicts = conflictFiles.length > 0 || mergeResult.includes("<<<<<<");
       return { conflicted: hasConflicts, conflictFiles };
-    } catch {
-      // If merge-base fails (no common ancestor), assume conflicted
+    } catch (error) {
+      logGhCliError(
+        `Failed to check conflicts for ${repoPath} against origin/${base}; assuming conflicted`,
+        error,
+      );
       return { conflicted: true, conflictFiles: [] };
     }
   }
@@ -472,7 +431,11 @@ export class GhCliGateway implements GitHubGateway {
     let url: string;
     try {
       url = gh(args, repo).trim();
-    } catch {
+    } catch (error) {
+      logGhCliError(
+        `Issue create with labels failed in ${repo}; retrying without labels`,
+        error,
+      );
       // Labels may not exist — retry without them
       const fallbackArgs = [
         "issue", "create",

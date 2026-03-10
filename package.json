@@ -2,6 +2,7 @@
   "name": "devagent-hub",
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "bun@1.3.10",
   "bin": {
     "devagent-hub": "dist/cli/index.js"
   },
@@ -25,7 +26,7 @@
     "eslint": "^10.0.3",
     "ink-testing-library": "^4.0.0",
     "react-devtools-core": "^7.0.1",
-    "typescript": "^5.7.0",
+    "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1",
     "vitest": "^3.0.0"
   },
