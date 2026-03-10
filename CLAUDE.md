@@ -1,26 +1,46 @@
-# DevAgent Hub
+# DevAgent Hub — Agent Instructions
 
-Workflow control plane for AI coding agents. Orchestrates issue→PR lifecycle across multiple runner backends (devagent, opencode, claude, codex).
+## What this project is
 
-## Commands
+DevAgent Hub is a workflow control plane that orchestrates AI coding agents. It manages the lifecycle of issue-to-PR workflows: triage → plan → implement → verify → review → repair → done.
 
-```sh
-bun test              # run tests (must all pass)
-bunx tsc --noEmit     # typecheck (must be clean)
+## Tech stack
+
+- **Runtime**: Bun (TypeScript, ESM)
+- **Tests**: `bun test` (vitest-compatible, uses `bun:sqlite`)
+- **TUI**: Ink (React for CLI)
+- **DB**: SQLite via `bun:sqlite`
+- **Config**: YAML frontmatter in WORKFLOW.md
+
+## Project structure
+
+```
+src/
+  cli/           # CLI entry point, commands, argument parsing
+  runner/        # Runner adapters (devagent, opencode, claude, codex)
+  state/         # SQLite store, types, state machine
+  workflow/      # Orchestrator, config, review gates, autopilot, skill resolver
+  tui/           # Ink/React terminal UI components
+  github/        # GitHub API gateway
+  workspace/     # Git worktree management
+  __tests__/     # All tests
+.agents/skills/  # Skill definitions (SKILL.md per skill)
 ```
 
-## Architecture
+## Key commands
 
-- `src/workflow/orchestrator.ts` — core state machine, phase execution
-- `src/runner/` — runner adapters (RunnerAdapter interface)
-- `src/state/store.ts` — SQLite persistence, state transitions
-- `src/workflow/config.ts` — WORKFLOW.md parsing, validation
-- `src/tui/` — Ink/React terminal UI
+```sh
+bun test              # run all tests
+bunx tsc --noEmit     # typecheck
+bun run build         # build CLI
+```
 
-## Conventions
+## Rules
 
-- ESM only, `node:` prefixed imports
-- Tests in `src/__tests__/`, use vitest API with `bun test`
-- Mock launchers: `MockRunLauncher.setResponse(phase, { exitCode, output })`
-- All runner outputs are flat JSON matching phase schemas
-- State transitions enforced by `assertTransition()` — never write status directly
+1. **Always run `bun test` after changes** — all 222+ tests must pass.
+2. **Never skip typecheck** — `bunx tsc --noEmit` must be clean.
+3. **Runner adapters** must implement `RunnerAdapter` from `src/runner/runner-adapter.ts`. See `.agents/skills/runner-integration/SKILL.md`.
+4. **State transitions** are enforced by `assertTransition()`. See `.agents/skills/state-machine/SKILL.md`.
+5. **Mock outputs** must use the flat contract format (see `.agents/skills/testing/SKILL.md`).
+6. **No `require()` in source files** — this is an ESM project. Use `import`.
+7. **Prefer `node:` prefixed imports** — `node:fs`, `node:path`, `node:child_process`.
