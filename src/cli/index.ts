@@ -73,6 +73,11 @@ function createService(): { store: CanonicalStore; service: WorkflowService } {
   };
 }
 
+function createStore(): CanonicalStore {
+  ensureConfigDir();
+  return new CanonicalStore(DB_PATH);
+}
+
 function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
 }
@@ -113,14 +118,16 @@ function printHelp(): void {
 
 Commands:
   project add
+  list-projects [--json]
   issue sync
+  list-issues --project <projectId> [--json]
   run start --issue <number>
   run resume <id>
   run reject <id> --note <text>
   run cancel <id>
   pr open <id>
   pr repair <id>
-  list
+  list [--json]
   status <id> [--json]
   tui [--screen inbox|runs|detail|settings] [--workflow <id>]
   help
@@ -256,10 +263,54 @@ if (command === "pr" && subcommand === "repair") {
   process.exit(0);
 }
 
+if (command === "list-projects") {
+  const store = createStore();
+  try {
+    const projects = store.listProjects();
+    if (hasFlag([subcommand, ...args].filter(Boolean) as string[], "--json")) {
+      console.log(JSON.stringify(projects));
+    } else {
+      for (const p of projects) {
+        console.log(`${p.id}  ${p.name}  ${p.repoRoot}`);
+      }
+    }
+  } finally {
+    store.close();
+  }
+  process.exit(0);
+}
+
+if (command === "list-issues") {
+  const allArgs = [subcommand, ...args].filter(Boolean) as string[];
+  const projectId = argValue(allArgs, "--project");
+  if (!projectId) {
+    throw new Error("Usage: devagent-hub list-issues --project <projectId> [--json]");
+  }
+  const store = createStore();
+  try {
+    const items = store.listWorkItems(projectId);
+    if (hasFlag(allArgs, "--json")) {
+      console.log(JSON.stringify(items));
+    } else {
+      for (const item of items) {
+        console.log(`#${item.externalId}  ${item.title}  ${item.state}`);
+      }
+    }
+  } finally {
+    store.close();
+  }
+  process.exit(0);
+}
+
 if (command === "list") {
   const { store, service } = createService();
   try {
-    console.log(JSON.stringify(service.listWorkflows(), null, 2));
+    const workflows = service.listWorkflows();
+    if (subcommand === "--json" || hasFlag(args, "--json")) {
+      console.log(JSON.stringify(workflows));
+    } else {
+      console.log(JSON.stringify(workflows, null, 2));
+    }
   } finally {
     store.close();
   }
