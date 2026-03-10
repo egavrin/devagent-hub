@@ -62,6 +62,7 @@ Repo-specific skill availability must also be present in the clean clone:
 
 - `baseline:check`
   - verifies each sibling repo matches the manifest SHA and has a clean working tree
+  - treats `devagent-hub` as a self-reference exemption because a checked-in manifest cannot pin the same commit that updates it
 - `baseline:drift`
   - fails if protocol types are declared outside `devagent-sdk`
 - `baseline:compat`

@@ -8,12 +8,22 @@ const statuses = readBaselineRepoStatuses(manifest, resolveWorkspaceRoot(resolve
 
 for (const status of statuses) {
   const expected = manifest.repos[status.name];
-  assert(
-    status.headSha === expected.sha,
-    `${status.name} expected ${expected.sha} but found ${status.headSha}`,
-  );
+  if (status.name === "devagent-hub") {
+    if (status.headSha !== expected.sha) {
+      console.log(
+        `${status.name} manifest pins ${expected.sha}; current HEAD is ${status.headSha} (self-reference exempt)`,
+      );
+    } else {
+      console.log(`${status.name} ${status.headSha} clean`);
+    }
+  } else {
+    assert(
+      status.headSha === expected.sha,
+      `${status.name} expected ${expected.sha} but found ${status.headSha}`,
+    );
+    console.log(`${status.name} ${status.headSha} clean`);
+  }
   assert(status.clean, `${status.name} working tree is not clean`);
-  console.log(`${status.name} ${status.headSha} clean`);
 }
 
 console.log(`protocol ${manifest.protocolVersion}`);
