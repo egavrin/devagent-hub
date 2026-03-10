@@ -351,8 +351,7 @@ export class WorkflowService {
       current.protocolVersion !== manifest.protocolVersion ||
       current.sdkSha !== expected["devagent-sdk"].sha ||
       current.runnerSha !== expected["devagent-runner"].sha ||
-      current.devagentSha !== expected["devagent"].sha ||
-      current.hubSha !== expected["devagent-hub"].sha
+      current.devagentSha !== expected["devagent"].sha
     ) {
       throw new WorkflowStateError(
         "STALE_BASELINE",
