@@ -59,9 +59,17 @@ to match the pinned manifest exactly.
   - covers `triage`, `plan`, `implement`, `verify`, `review`, `repair`
   - includes failure drills for invalid requests, bad verification commands, missing artifact directory, unsupported capability, and cancellation
 
-## Fresh Issue To PR Flow
+## Reliability Happy Path
 
-The standard assisted path is:
+The standard assisted path is the reliability happy path.
+
+Validated executor profile for this path:
+
+- executor: `devagent`
+- provider: `chatgpt`
+- model: `gpt-5.4`
+
+The operator commands are:
 
 ```bash
 devagent-hub project add
@@ -79,6 +87,9 @@ Success criteria:
 - the workflow pauses again before PR handoff
 - `status` shows the latest artifact paths and next operator action
 - the PR opens from a fresh branch off current `main`
+
+Counted reliability runs for the current hardening cycle are recorded in
+[docs/validation-ledger.md](docs/validation-ledger.md).
 
 ## Review The Plan
 

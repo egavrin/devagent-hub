@@ -1,6 +1,10 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { BaselineManifest, BaselineRepoName } from "../baseline/manifest.js";
+import {
+  resolveWorkspaceRoot as resolveCanonicalWorkspaceRoot,
+  type BaselineManifest,
+  type BaselineRepoName,
+} from "../baseline/manifest.js";
 
 export type BootstrapAction = {
   cwd: string;
@@ -33,11 +37,13 @@ export function buildBootstrapPlan(
   workspaceRoot: string,
   manifest: BaselineManifest,
 ): BootstrapPlan {
+  const resolvedHubRoot = resolve(hubRoot);
   const resolvedWorkspaceRoot = resolve(workspaceRoot);
-  const expectedHubPath = join(resolvedWorkspaceRoot, "devagent-hub");
-  if (resolve(hubRoot) !== expectedHubPath) {
+  const expectedWorkspaceRoot = resolveCanonicalWorkspaceRoot(resolvedHubRoot);
+
+  if (resolvedWorkspaceRoot !== expectedWorkspaceRoot) {
     throw new Error(
-      `Workspace root ${resolvedWorkspaceRoot} does not match the current hub checkout. Expected ${expectedHubPath}.`,
+      `Expected workspace root ${expectedWorkspaceRoot} for hub root ${resolvedHubRoot}, got ${resolvedWorkspaceRoot}`,
     );
   }
 
@@ -63,6 +69,14 @@ export function buildBootstrapPlan(
 
     if (repo.name === "devagent-sdk" || repo.name === "devagent-runner" || repo.name === "devagent" || repo.name === "devagent-hub") {
       actions.push({ cwd: repo.path, command: ["bun", "run", "build"], label: `${repo.name}: build` });
+    }
+
+    if (repo.name === "devagent-runner") {
+      actions.push({
+        cwd: repo.path,
+        command: ["bun", "install"],
+        label: "devagent-runner: refresh package links after build",
+      });
     }
 
     if (repo.name === "devagent-runner") {

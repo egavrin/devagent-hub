@@ -10,6 +10,7 @@ import { WorkflowStateError } from "../workflows/errors.js";
 import type { GitHubGateway } from "../github/gateway.js";
 import type { GitHubCheck, GitHubComment, GitHubIssue, GitHubPR } from "../github/types.js";
 import type { RunnerClient } from "../runner-client/types.js";
+import type { Project } from "../canonical/types.js";
 import { PROTOCOL_VERSION, type ArtifactRef, type TaskExecutionEvent, type TaskExecutionRequest, type TaskExecutionResult } from "@devagent-sdk/types";
 
 const paths: string[] = [];
@@ -68,6 +69,7 @@ class StubGitHubGateway implements GitHubGateway {
   public reviewComments: GitHubComment[] = [];
   public ciFailureLogs: Array<{ check: string; log: string }> = [];
   public prHead = "devagent/workflow/test-branch";
+  public pushFailuresRemaining = 0;
 
   constructor(private readonly issue: GitHubIssue) {}
 
@@ -124,6 +126,10 @@ class StubGitHubGateway implements GitHubGateway {
   }
 
   async pushBranch(repoPath: string, branch: string): Promise<void> {
+    if (this.pushFailuresRemaining > 0) {
+      this.pushFailuresRemaining -= 1;
+      throw new Error("simulated push failure");
+    }
     this.pushedBranches.push({ repoPath, branch });
   }
 
@@ -154,13 +160,17 @@ class StubRunnerClient implements RunnerClient {
   public readonly cancelledRuns: string[] = [];
   public readonly cleanedRuns: string[] = [];
   public readonly startedRequests: TaskExecutionRequest[] = [];
+  private readonly failureByTaskType: Partial<Record<TaskExecutionRequest["taskType"], { code: string; message: string }>>;
 
   constructor(
     private readonly repoRoot: string,
     private readonly reviewSequence: string[],
     private readonly changedFilesByTaskType: Partial<Record<TaskExecutionRequest["taskType"], string[]>> = {},
     private readonly patchBytesByTaskType: Partial<Record<TaskExecutionRequest["taskType"], number>> = {},
-  ) {}
+    failureByTaskType: Partial<Record<TaskExecutionRequest["taskType"], { code: string; message: string }>> = {},
+  ) {
+    this.failureByTaskType = failureByTaskType;
+  }
 
   async startTask(request: TaskExecutionRequest): Promise<{ runId: string }> {
     const runId = `${request.taskType}-${request.taskId}`;
@@ -172,6 +182,7 @@ class StubRunnerClient implements RunnerClient {
 
   async subscribe(runId: string, onEvent: (event: TaskExecutionEvent) => void): Promise<void> {
     const request = this.requireRequest(runId);
+    const failure = this.failureByTaskType[request.taskType];
     const started: TaskExecutionEvent = {
       protocolVersion: PROTOCOL_VERSION,
       type: "started",
@@ -183,7 +194,7 @@ class StubRunnerClient implements RunnerClient {
       type: "completed",
       at: "2026-03-10T00:00:01.000Z",
       taskId: request.taskId,
-      status: "success",
+      status: failure ? "failed" : "success",
     };
     this.events.set(runId, [started, completed]);
     onEvent(started);
@@ -198,16 +209,18 @@ class StubRunnerClient implements RunnerClient {
     const request = this.requireRequest(runId);
     const workspacePath = await this.ensureWorkspace(runId);
     const artifact = await this.writeArtifact(workspacePath, request);
+    const failure = this.failureByTaskType[request.taskType];
     const result: TaskExecutionResult = {
       protocolVersion: PROTOCOL_VERSION,
       taskId: request.taskId,
-      status: "success",
+      status: failure ? "failed" : "success",
       artifacts: [artifact],
       metrics: {
         startedAt: "2026-03-10T00:00:00.000Z",
         finishedAt: "2026-03-10T00:00:01.000Z",
         durationMs: 1000,
       },
+      error: failure,
     };
     await writeFile(join(workspacePath, "result.json"), JSON.stringify(result, null, 2));
     this.results.set(runId, result);
@@ -389,6 +402,8 @@ async function createService(
   options: {
     changedFilesByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], string[]>>;
     patchBytesByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], number>>;
+    failureByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], { code: string; message: string }>>;
+    githubPushFailures?: number;
   } = {},
 ) {
   const root = await createTempDir("devagent-hub-service-");
@@ -417,11 +432,13 @@ async function createService(
     comments: [],
   };
   const github = new StubGitHubGateway(issue);
+  github.pushFailuresRemaining = options.githubPushFailures ?? 0;
   const runner = new StubRunnerClient(
     repoRoot,
     [...reviewSequence],
     options.changedFilesByTaskType,
     options.patchBytesByTaskType,
+    options.failureByTaskType,
   );
   const config = defaultConfig();
   config.runner.bin = "devagent";
@@ -438,10 +455,42 @@ async function createService(
 
   return {
     store,
+    dbPath,
+    project,
+    issue,
+    config,
     github,
     repoRoot,
     runner,
     service: new WorkflowService(store, github, runner, project, config),
+  };
+}
+
+function reopenService(input: {
+  dbPath: string;
+  project: Project;
+  issue: GitHubIssue;
+  config: ReturnType<typeof defaultConfig>;
+  repoRoot: string;
+  reviewSequence?: string[];
+  changedFilesByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], string[]>>;
+  patchBytesByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], number>>;
+  failureByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], { code: string; message: string }>>;
+}) {
+  const store = new CanonicalStore(input.dbPath);
+  const github = new StubGitHubGateway(input.issue);
+  const runner = new StubRunnerClient(
+    input.repoRoot,
+    [...(input.reviewSequence ?? ["No defects found."])],
+    input.changedFilesByTaskType,
+    input.patchBytesByTaskType,
+    input.failureByTaskType,
+  );
+  return {
+    store,
+    github,
+    runner,
+    service: new WorkflowService(store, github, runner, input.project, input.config),
   };
 }
 
@@ -479,6 +528,30 @@ describe("WorkflowService", () => {
     store.close();
   });
 
+  it("resumes cleanly after restart when paused on plan approval", async () => {
+    const setup = await createService();
+    const started = await setup.service.start("42");
+    setup.store.close();
+
+    const reopened = reopenService({
+      dbPath: setup.dbPath,
+      project: setup.project,
+      issue: setup.issue,
+      config: setup.config,
+      repoRoot: setup.repoRoot,
+    });
+
+    const status = reopened.service.getStatusView(started.id);
+    expect(status.status).toBe("waiting_approval");
+    expect(status.stage).toBe("plan");
+
+    const resumed = await reopened.service.resume(started.id);
+    expect(resumed.status).toBe("waiting_approval");
+    expect(resumed.stage).toBe("review");
+
+    reopened.store.close();
+  });
+
   it("resumes through implement, verify, review and pauses before PR", async () => {
     const { store, service, runner } = await createService();
     const started = await service.start("42");
@@ -514,7 +587,7 @@ describe("WorkflowService", () => {
     expect(resumed.stage).toBe("review");
 
     store.close();
-  });
+  }, 15_000);
 
   it("fails when implement changes exceed the run-level review limit", async () => {
     const { store, service } = await createService(["No defects found."], {
@@ -531,6 +604,41 @@ describe("WorkflowService", () => {
 
     store.close();
   });
+
+  it("resumes cleanly after restart when implement is paused for oversize review", async () => {
+    const setup = await createService(["No defects found."], {
+      changedFilesByTaskType: {
+        implement: Array.from({ length: 21 }, (_, index) => `src/file-${index}.ts`),
+      },
+    });
+    const started = await setup.service.start("42");
+    const gated = await setup.service.resume(started.id);
+    expect(gated.status).toBe("waiting_approval");
+    expect(gated.stage).toBe("implement");
+    setup.store.close();
+
+    const reopened = reopenService({
+      dbPath: setup.dbPath,
+      project: setup.project,
+      issue: setup.issue,
+      config: setup.config,
+      repoRoot: setup.repoRoot,
+      changedFilesByTaskType: {
+        implement: Array.from({ length: 21 }, (_, index) => `src/file-${index}.ts`),
+      },
+    });
+
+    const status = reopened.service.getStatusView(started.id);
+    expect(status.status).toBe("waiting_approval");
+    expect(status.stage).toBe("implement");
+    expect(status.statusReason).toContain("review.max_changed_files");
+
+    const resumed = await reopened.service.resume(started.id);
+    expect(resumed.status).toBe("waiting_approval");
+    expect(resumed.stage).toBe("review");
+
+    reopened.store.close();
+  }, 15_000);
 
   it("pauses for manual approval when implement patch size exceeds the review threshold", async () => {
     const { store, service } = await createService(["No defects found."], {
@@ -621,6 +729,44 @@ describe("WorkflowService", () => {
     store.close();
   });
 
+  it("shows the persisted failed verify state after restart", async () => {
+    const setup = await createService(["No defects found."], {
+      failureByTaskType: {
+        verify: {
+          code: "EXECUTION_FAILED",
+          message: "verify failed",
+        },
+      },
+    });
+    const started = await setup.service.start("42");
+    const failed = await setup.service.resume(started.id);
+    expect(failed.status).toBe("failed");
+    expect(failed.stage).toBe("verify");
+    setup.store.close();
+
+    const reopened = reopenService({
+      dbPath: setup.dbPath,
+      project: setup.project,
+      issue: setup.issue,
+      config: setup.config,
+      repoRoot: setup.repoRoot,
+      failureByTaskType: {
+        verify: {
+          code: "EXECUTION_FAILED",
+          message: "verify failed",
+        },
+      },
+    });
+
+    const status = reopened.service.getStatusView(started.id);
+    expect(status.status).toBe("failed");
+    expect(status.stage).toBe("verify");
+    expect(status.latestResult?.status).toBe("failed");
+    expect(status.latestResult?.error?.message).toBe("verify failed");
+
+    reopened.store.close();
+  });
+
   it("runs the repair loop when review artifacts contain blocking findings", async () => {
     const { store, service } = await createService([
       "Severity: high\nFix recommendation: resolve the lint failure.",
@@ -669,7 +815,7 @@ describe("WorkflowService", () => {
     expect(resumed.stage).toBe("review");
 
     store.close();
-  });
+  }, 15_000);
 
   it("includes latest review and verification artifacts when the automatic repair loop reruns", async () => {
     const { store, service, runner } = await createService([
@@ -742,7 +888,33 @@ describe("WorkflowService", () => {
     expect(await readFile(reviewArtifact!.path, "utf-8")).toContain("No defects found");
 
     store.close();
-  });
+  }, 15_000);
+
+  it("retries PR open after approval was already persisted", async () => {
+    const { store, service, github, runner } = await createService(["No defects found."], {
+      githubPushFailures: 1,
+    });
+    const started = await service.start("42");
+    await service.resume(started.id);
+
+    await expect(service.openPr(started.id)).rejects.toThrow("simulated push failure");
+    const stuck = service.getSnapshot(started.id);
+    expect(stuck.workflow.status).toBe("waiting_approval");
+    expect(stuck.workflow.prNumber).toBeUndefined();
+    expect(stuck.approvals.at(-1)?.stage).toBe("review");
+    expect(stuck.approvals.at(-1)?.status).toBe("approved");
+
+    const reopened = await service.openPr(started.id);
+
+    expect(reopened.status).toBe("completed");
+    expect(reopened.stage).toBe("done");
+    expect(reopened.prNumber).toBe(10);
+    expect(github.createdPrs).toHaveLength(1);
+    expect(github.pushedBranches).toHaveLength(1);
+    expect(runner.cleanedRuns).toHaveLength(1);
+
+    store.close();
+  }, 15_000);
 
   it("repairs an opened PR from review comments and CI failures", async () => {
     const { store, service, github, repoRoot, runner } = await createService([
@@ -795,7 +967,7 @@ describe("WorkflowService", () => {
     expect(runner.startedRequests.at(-3)?.context.extraInstructions?.join("\n")).toContain("src/tui/app.tsx:25");
 
     store.close();
-  });
+  }, 15_000);
 
   it("fails PR repair when the PR head no longer matches the workflow branch", async () => {
     const { store, service, github } = await createService([
@@ -846,7 +1018,7 @@ describe("WorkflowService", () => {
     expect(repairRequest?.context.skills).toContain("state-machine");
 
     store.close();
-  });
+  }, 15_000);
 
   it("cancels an in-flight workflow and cleans up the runner workspace", async () => {
     const root = await createTempDir("devagent-hub-cancel-service-");

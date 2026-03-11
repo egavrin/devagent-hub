@@ -256,8 +256,9 @@ is excluded from discovery.
 
 ## Validation
 
-The pinned release-candidate baseline is recorded in [baseline.json](baseline.json), and the full
-operator checklist lives in [BASELINE_VALIDATION.md](BASELINE_VALIDATION.md).
+The pinned release-candidate baseline is recorded in [baseline.json](baseline.json), the full
+operator checklist lives in [BASELINE_VALIDATION.md](BASELINE_VALIDATION.md), and the current
+3-loop reliability bar is tracked in [docs/validation-ledger.md](docs/validation-ledger.md).
 
 See [WORKFLOW.md](WORKFLOW.md) for repo-local workflow configuration semantics, including review size
 limits and human approval behavior.
