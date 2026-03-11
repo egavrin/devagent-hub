@@ -127,20 +127,29 @@ When the workflow pauses on `plan`, use:
 devagent-hub status <workflow-id>
 ```
 
-`status` prints the latest artifact paths. Open the printed `plan.md` path directly, review the printed `plan.md` path, then
-either:
+`status` prints the latest artifact paths. For example:
+
+```text
+Workflow: wf_123
+Stage: plan
+Status: waiting_for_approval
+Latest artifacts:
+  - plan: .devagent-runner/artifacts/task-42/plan.md
+```
+
+Open the printed `plan.md` path directly, review that file, then either approve the plan:
 
 ```bash
 devagent-hub run resume <workflow-id>
 ```
 
-or:
+or reject it with revision guidance:
 
 ```bash
 devagent-hub run reject <workflow-id> --note "expand rollback notes and split migration from implementation"
 ```
 
-The rejection note becomes input to the next `plan`.
+The rejection note becomes input to the next `plan` attempt.
 
 When the workflow pauses before PR handoff, open the final approval gate with:
 
