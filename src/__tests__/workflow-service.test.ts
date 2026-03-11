@@ -931,14 +931,14 @@ describe("WorkflowService", () => {
       id: 1,
       nodeId: "PRRC_kwDOExample",
       author: "reviewer",
-      body: "Please remove the debug branch and make the TUI label clearer.",
+      body: "Please simplify the status output and remove the debug branch.",
       createdAt: "2026-03-10T00:00:00.000Z",
-      path: "src/tui/app.tsx",
+      path: "src/cli/index.ts",
       line: 25,
     }];
     github.ciFailureLogs = [{
       check: "Typecheck, Test, Build",
-      log: "src/tui/app.tsx:10:7 - error TS2322: Type 'string' is not assignable to type 'number'.",
+      log: "src/cli/index.ts:10:7 - error TS2322: Type 'string' is not assignable to type 'number'.",
     }];
 
     const repaired = await service.repairPr(started.id);
@@ -961,10 +961,10 @@ describe("WorkflowService", () => {
     expect(github.resolvedThreads[0]?.nodeIds).toEqual(["PRRC_kwDOExample"]);
     expect(runner.cleanedRuns).toHaveLength(2);
     expect(runner.startedRequests.at(-3)?.taskType).toBe("repair");
-    expect(runner.startedRequests.at(-3)?.context.comments?.[0]?.body).toContain("src/tui/app.tsx:25");
-    expect(runner.startedRequests.at(-3)?.context.changedFilesHint).toEqual(["src/tui/app.tsx"]);
+    expect(runner.startedRequests.at(-3)?.context.comments?.[0]?.body).toContain("src/cli/index.ts:25");
+    expect(runner.startedRequests.at(-3)?.context.changedFilesHint).toEqual(["src/cli/index.ts"]);
     expect(runner.startedRequests.at(-3)?.context.extraInstructions?.join("\n")).toContain("Typecheck, Test, Build");
-    expect(runner.startedRequests.at(-3)?.context.extraInstructions?.join("\n")).toContain("src/tui/app.tsx:25");
+    expect(runner.startedRequests.at(-3)?.context.extraInstructions?.join("\n")).toContain("src/cli/index.ts:25");
 
     store.close();
   }, 15_000);

@@ -137,7 +137,7 @@ export function defaultConfig(): WorkflowConfig {
         review: ["security-checklist"],
       },
       path_overrides: {
-        "src/runner/**": ["runner-integration"],
+        "src/runner-client/**": ["runner-integration"],
         "src/workflow/**": ["state-machine"],
         "src/__tests__/**": ["testing"],
       },

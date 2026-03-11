@@ -2,7 +2,7 @@
 
 Canonical workflow orchestrator for the DevAgent stack.
 
-Hub owns issue import, workflow state, task generation, approvals, persistence, operator CLI/TUI
+Hub owns issue import, workflow state, task generation, approvals, persistence, operator CLI
 surfaces, and PR handoff. It does not launch executors directly. Hub resolves an `ExecutorSpec`,
 submits an SDK request to `devagent-runner`, ingests normalized events/results/artifacts, and
 drives the staged workflow around them.
@@ -96,7 +96,6 @@ devagent-hub pr repair <workflow-id>
 devagent-hub list
 devagent-hub status <workflow-id>
 devagent-hub status <workflow-id> --json
-devagent-hub tui --screen runs
 ```
 
 ## Review The Plan

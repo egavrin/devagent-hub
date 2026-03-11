@@ -23,6 +23,7 @@ function resolveWorkspaceRoot(): string {
 }
 
 const workspaceRoot = resolveWorkspaceRoot();
+const includeBaselineTests = process.env["DEVAGENT_HUB_INCLUDE_BASELINE"] === "1";
 
 export default defineConfig({
   resolve: {
@@ -37,6 +38,18 @@ export default defineConfig({
   },
   test: {
     include: ["src/__tests__/**/*.test.ts", "src/__tests__/**/*.test.tsx"],
-    exclude: [".devagent-runner/**", ".live-dist/**", "dist/**", "node_modules/**"],
+    exclude: [
+      ".devagent-runner/**",
+      ".live-dist/**",
+      "dist/**",
+      "node_modules/**",
+      ...(!includeBaselineTests
+        ? [
+            "src/__tests__/baseline-compatibility.test.ts",
+            "src/__tests__/baseline-machine-path.test.ts",
+            "src/__tests__/baseline-manifest.test.ts",
+          ]
+        : []),
+    ],
   },
 });

@@ -129,7 +129,6 @@ Commands:
   pr repair <id>
   list [--json]
   status <id> [--json]
-  tui [--screen inbox|runs|detail|settings] [--workflow <id>]
   help
 `);
 }
@@ -332,16 +331,6 @@ if (command === "status") {
   } finally {
     store.close();
   }
-  process.exit(0);
-}
-
-if (command === "tui") {
-  const screen = (argValue(args, "--screen") ?? "runs") as "inbox" | "runs" | "detail" | "settings";
-  const workflowId = argValue(args, "--workflow");
-  const { store } = createService();
-  const { renderTui } = await import("../tui/index.js");
-  await renderTui(store, screen, workflowId).waitUntilExit();
-  store.close();
   process.exit(0);
 }
 

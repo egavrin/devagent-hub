@@ -1,3 +1,10 @@
+# Archived Plan
+
+This document is historical. It describes a removed TUI surface and pre-cutover Hub architecture.
+It does not match the current implementation. Use [`README.md`](../../README.md),
+[`BASELINE_VALIDATION.md`](../../BASELINE_VALIDATION.md), and
+[`WORKFLOW.md`](../../WORKFLOW.md) for the current source of truth.
+
 # TUI Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

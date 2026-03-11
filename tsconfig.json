@@ -10,8 +10,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "jsx": "react-jsx",
-    "types": ["bun-types", "@types/react"]
+    "types": ["bun-types"]
   },
   "include": ["src"]
 }

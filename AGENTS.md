@@ -2,45 +2,55 @@
 
 ## What this project is
 
-DevAgent Hub is a workflow control plane that orchestrates AI coding agents. It manages the lifecycle of issue-to-PR workflows: triage → plan → implement → verify → review → repair → done.
+DevAgent Hub is the workflow orchestrator for the DevAgent stack. It owns issue import, workflow
+state, approvals, persistence, operator CLI flows, and PR handoff.
+
+The supported machine path is:
+
+```text
+devagent-hub CLI -> devagent-runner -> devagent execute -> artifacts/events/results -> devagent-hub
+```
+
+Hub does not launch executors directly and no longer ships a TUI surface.
 
 ## Tech stack
 
-- **Runtime**: Bun (TypeScript, ESM)
-- **Tests**: `bun test` (vitest-compatible, uses `bun:sqlite`)
-- **TUI**: Ink (React for CLI)
-- **DB**: SQLite via `bun:sqlite`
-- **Config**: YAML frontmatter in WORKFLOW.md
+- **Runtime**: Bun + TypeScript (ESM)
+- **Tests**: Vitest via `bun run test`
+- **Database**: SQLite via `better-sqlite3`
+- **Config**: frontmatter in `WORKFLOW.md`
 
 ## Project structure
 
-```
+```text
 src/
-  cli/           # CLI entry point, commands, argument parsing
-  runner/        # Runner adapters (devagent, opencode, claude, codex)
-  state/         # SQLite store, types, state machine
-  workflow/      # Orchestrator, config, review gates, autopilot, skill resolver
-  tui/           # Ink/React terminal UI components
-  github/        # GitHub API gateway
-  workspace/     # Git worktree management
-  __tests__/     # All tests
-.agents/skills/  # Skill definitions (SKILL.md per skill)
+  baseline/       # Baseline manifest and validation helpers
+  bootstrap/      # Local sibling-repo bootstrap flow
+  canonical/      # Canonical persisted workflow/task/approval types
+  cli/            # Operator CLI entrypoint
+  github/         # GitHub gateway and helpers
+  persistence/    # SQLite-backed canonical store
+  runner-client/  # Runner integration boundary
+  workflow/       # WORKFLOW.md parsing, skills, guardrails
+  workflows/      # Canonical workflow service/orchestration
+  __tests__/      # Test suite
 ```
 
 ## Key commands
 
 ```sh
-bun test              # run all tests
-bunx tsc --noEmit     # typecheck
-bun run build         # build CLI
+bun test
+bunx tsc --noEmit
+bun run build
+bun run baseline:drift
+bun run baseline:compat
+bun run baseline:smoke
 ```
 
 ## Rules
 
-1. **Always run `bun test` after changes** — all 222+ tests must pass.
-2. **Never skip typecheck** — `bunx tsc --noEmit` must be clean.
-3. **Runner adapters** must implement `RunnerAdapter` from `src/runner/runner-adapter.ts`. See `.agents/skills/runner-integration/SKILL.md`.
-4. **State transitions** are enforced by `assertTransition()`. See `.agents/skills/state-machine/SKILL.md`.
-5. **Mock outputs** must use the flat contract format (see `.agents/skills/testing/SKILL.md`).
-6. **No `require()` in source files** — this is an ESM project. Use `import`.
-7. **Prefer `node:` prefixed imports** — `node:fs`, `node:path`, `node:child_process`.
+1. Keep the CLI as the only operator surface. `status` is the review UI.
+2. Route execution through `src/runner-client/`; do not add direct executor CLI wiring.
+3. Persist workflow/task/attempt/approval state through `CanonicalStore`; do not reintroduce legacy state models.
+4. Treat `README.md`, `BASELINE_VALIDATION.md`, and `WORKFLOW.md` as the operator-facing source of truth.
+5. Experimental runner adapters may exist, but only the DevAgent path is production-grade for MVP work.
