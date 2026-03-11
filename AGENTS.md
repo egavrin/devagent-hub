@@ -54,3 +54,6 @@ bun run baseline:smoke
 3. Persist workflow/task/attempt/approval state through `CanonicalStore`; do not reintroduce legacy state models.
 4. Treat `README.md`, `BASELINE_VALIDATION.md`, and `WORKFLOW.md` as the operator-facing source of truth.
 5. Experimental runner adapters may exist, but only the DevAgent path is production-grade for MVP work.
+6. Run `bunx tsc --noEmit`, `bun run test`, `bun run build`, and `bun run check:oss` before finishing.
+7. Keep generated workflow artifacts under runner-managed directories, never in repo-tracked docs or source paths.
+8. Treat review-size limits and stale-state checks as safety features, not optional policy.

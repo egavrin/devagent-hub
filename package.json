@@ -3,6 +3,19 @@
   "version": "0.1.0",
   "type": "module",
   "packageManager": "bun@1.3.10",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/egavrin/devagent-hub.git"
+  },
+  "bugs": {
+    "url": "https://github.com/egavrin/devagent-hub/issues"
+  },
+  "homepage": "https://github.com/egavrin/devagent-hub#readme",
+  "engines": {
+    "bun": ">=1.3.10",
+    "node": ">=20"
+  },
   "bin": {
     "devagent-hub": "dist/cli/index.js"
   },
@@ -15,7 +28,8 @@
     "baseline:check": "bun run scripts/baseline/check-baseline.ts",
     "baseline:drift": "bun run scripts/baseline/check-protocol-drift.ts",
     "baseline:compat": "DEVAGENT_HUB_INCLUDE_BASELINE=1 node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts src/__tests__/baseline-compatibility.test.ts",
-    "baseline:smoke": "DEVAGENT_HUB_INCLUDE_BASELINE=1 node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts src/__tests__/baseline-machine-path.test.ts"
+    "baseline:smoke": "DEVAGENT_HUB_INCLUDE_BASELINE=1 node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts src/__tests__/baseline-machine-path.test.ts",
+    "check:oss": "node ./scripts/check-oss.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

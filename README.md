@@ -2,6 +2,10 @@
 
 Canonical workflow orchestrator for the DevAgent stack.
 
+## Maturity
+
+Public alpha. Hub is the orchestrator and operator CLI for the validated DevAgent-only path.
+
 Hub owns issue import, workflow state, task generation, approvals, persistence, operator CLI
 surfaces, and PR handoff. It does not launch executors directly. Hub resolves an `ExecutorSpec`,
 submits an SDK request to `devagent-runner`, ingests normalized events/results/artifacts, and
@@ -238,7 +242,14 @@ bun install
 bunx tsc --noEmit
 bun run test
 bun run build
+bun run check:oss
 ```
+
+## Limitations
+
+- the supported contributor path is the four-repo sibling checkout plus bootstrap flow
+- only the DevAgent executor path is production-grade
+- package publication and a simpler single-repo install story are deferred
 
 Additional baseline commands:
 

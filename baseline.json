@@ -5,25 +5,25 @@
       "name": "devagent-sdk",
       "url": "https://github.com/egavrin/devagent-sdk",
       "branch": "main",
-      "sha": "ab28cf433161ed8863e8785014e734c20f7a79b7"
+      "sha": "bbc17cd489e5d6dd52703f7457ce514fa094aa68"
     },
     "devagent-runner": {
       "name": "devagent-runner",
       "url": "https://github.com/egavrin/devagent-runner",
       "branch": "main",
-      "sha": "ccc742b41ae3a4052296177034385886a553d9ff"
+      "sha": "6885d3f93105b0c65aaf2b53173c921b4f9ae31f"
     },
     "devagent": {
       "name": "devagent",
       "url": "https://github.com/egavrin/devagent",
       "branch": "main",
-      "sha": "cc5bd206367956143d7270e10de9d0f55957dfff"
+      "sha": "ef2b05362204098439bc8dea3427082a77a2951f"
     },
     "devagent-hub": {
       "name": "devagent-hub",
       "url": "https://github.com/egavrin/devagent-hub",
       "branch": "main",
-      "sha": "3a42aed0376f32c2380e261d713586aba9899322"
+      "sha": "8e86a6246891f2e59307c4ad7578e224264791de"
     }
   }
 }

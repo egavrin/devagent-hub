@@ -76,6 +76,11 @@ repair:
 - skill selection by stage and path
 - PR draft/open rules
 
+## How work enters this repo
+
+Most changes land through self-hosting Hub workflows or direct contributor changes to orchestration,
+persistence, GitHub integration, and operator CLI behavior.
+
 Hub resolves the selected profile into an SDK `ExecutorSpec`, submits a `TaskExecutionRequest` to
 `devagent-runner`, and waits for normalized events/results/artifacts. Hub does not shell out to
 executors directly.
@@ -92,6 +97,25 @@ runner:
 ```
 
 That is the live-validated path for end-to-end issue-to-PR runs through Hub.
+
+## Contributor completion bar
+
+Before merge, contributors should run:
+
+```bash
+bunx tsc --noEmit
+bun run test
+bun run build
+bun run baseline:drift
+bun run baseline:compat
+bun run baseline:smoke
+bun run check:oss
+```
+
+## Supported vs experimental
+
+- Supported: `devagent-hub -> devagent-runner -> devagent execute`
+- Experimental: non-DevAgent executor adapters until they have comparable live validation
 
 ## Stage Semantics
 
