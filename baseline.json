@@ -11,7 +11,7 @@
       "name": "devagent-runner",
       "url": "https://github.com/egavrin/devagent-runner",
       "branch": "main",
-      "sha": "6885d3f93105b0c65aaf2b53173c921b4f9ae31f"
+      "sha": "a151360bccbd41b4a79a8846efc2d65eb0154c0c"
     },
     "devagent": {
       "name": "devagent",
