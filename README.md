@@ -160,7 +160,7 @@ How feedback is used:
 - a rejected `plan` note becomes input to the next `plan` attempt
 - the rerun pauses again so a human can re-review the updated plan
 
-Use `status --json` only for scripts or external tooling. The default text output is the intended
+Use `status --json` for automation and tooling only. The default text output is the primary
 operator view.
 
 ## Review Before PR
