@@ -4,6 +4,17 @@ import type {
   WorkflowTaskType,
 } from "@devagent-sdk/types";
 
+export type RepairOutcome = {
+  unresolvedCommentCount: number;
+  ciFailureCount: number;
+  pushedCommit: boolean;
+  pushedSha?: string;
+};
+
+export type PersistedExecutionResult = TaskExecutionResult & {
+  repairOutcome?: RepairOutcome;
+};
+
 export type BaselineSystemSnapshot = {
   protocolVersion: string;
   sdkSha: string;
@@ -95,5 +106,5 @@ export type PersistedTaskEvent = {
 
 export type PersistedTaskResult = {
   taskId: string;
-  result: TaskExecutionResult;
+  result: PersistedExecutionResult;
 };

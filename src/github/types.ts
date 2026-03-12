@@ -17,6 +17,7 @@ export interface GitHubComment {
   createdAt: string;
   /** GraphQL node_id — needed to resolve review threads. */
   nodeId?: string;
+  isResolved?: boolean;
   path?: string;
   line?: number;
   startLine?: number;

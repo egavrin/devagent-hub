@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type {
   Approval,
   ExecutionAttempt,
+  PersistedExecutionResult,
   PersistedTaskEvent,
   PersistedTaskResult,
   Project,
@@ -11,7 +12,7 @@ import type {
   WorkflowBaselineSnapshot,
   WorkflowInstance,
 } from "../canonical/types.js";
-import type { ArtifactRef, TaskExecutionEvent, TaskExecutionResult, WorkflowTaskType } from "@devagent-sdk/types";
+import type { ArtifactRef, TaskExecutionEvent, WorkflowTaskType } from "@devagent-sdk/types";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS projects (
@@ -115,6 +116,20 @@ function serializeBaselineSnapshot(snapshot: WorkflowBaselineSnapshot): string {
 
 function deserializeBaselineSnapshot(raw: string): WorkflowBaselineSnapshot {
   return JSON.parse(raw) as WorkflowBaselineSnapshot;
+}
+
+export class ProjectRegistrationConflictError extends Error {
+  constructor(
+    readonly repoFullName: string,
+    readonly existingRepoRoot: string,
+    readonly attemptedRepoRoot: string,
+  ) {
+    super(
+      `Project "${repoFullName}" is already registered at "${existingRepoRoot}". ` +
+      `Refusing to overwrite it with "${attemptedRepoRoot}". Remove the existing registration or use a single local clone for this GitHub repo.`,
+    );
+    this.name = "ProjectRegistrationConflictError";
+  }
 }
 
 type PragmaColumnRow = {
@@ -313,7 +328,7 @@ function mapTaskArtifactRow(row: TaskArtifactRow): ArtifactRef {
 function mapTaskResultRow(row: TaskResultRow): PersistedTaskResult {
   return {
     taskId: row.task_id,
-    result: JSON.parse(row.result_json) as TaskExecutionResult,
+    result: JSON.parse(row.result_json) as PersistedExecutionResult,
   };
 }
 
@@ -370,6 +385,15 @@ export class CanonicalStore {
   }
 
   upsertProject(project: Project): Project {
+    const existing = this.getProject(project.id);
+    if (existing && existing.repoRoot !== project.repoRoot) {
+      throw new ProjectRegistrationConflictError(
+        project.repoFullName,
+        existing.repoRoot,
+        project.repoRoot,
+      );
+    }
+
     this.db.prepare(`
       INSERT INTO projects (id, name, repo_root, repo_full_name, workflow_config_path, allowed_executors_json)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -671,7 +695,7 @@ export class CanonicalStore {
     return (this.db.prepare("SELECT kind, path, mime_type, created_at FROM task_artifacts WHERE task_id = ? ORDER BY created_at").all(taskId) as TaskArtifactRow[]).map(mapTaskArtifactRow);
   }
 
-  recordResult(taskId: string, result: TaskExecutionResult): void {
+  recordResult(taskId: string, result: PersistedExecutionResult): void {
     this.db.prepare(`
       INSERT INTO task_results (task_id, result_json, created_at)
       VALUES (?, ?, ?)

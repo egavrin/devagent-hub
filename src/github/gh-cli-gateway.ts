@@ -62,6 +62,53 @@ function mapComment(c: ApiComment): GitHubComment {
   };
 }
 
+function fetchUnresolvedReviewCommentNodeIds(repo: string, prNumber: number): Set<string> | null {
+  try {
+    const [owner, name] = repo.split("/");
+    const query = `
+      query($owner: String!, $name: String!, $prNumber: Int!) {
+        repository(owner: $owner, name: $name) {
+          pullRequest(number: $prNumber) {
+            reviewThreads(first: 100) {
+              nodes {
+                isResolved
+                comments(first: 20) {
+                  nodes { id }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+    const raw = execFileSync("gh", [
+      "api", "graphql",
+      "-f", `query=${query}`,
+      "-F", `owner=${owner}`,
+      "-F", `name=${name}`,
+      "-F", `prNumber=${prNumber}`,
+    ], { encoding: "utf-8" });
+    const data = JSON.parse(raw);
+    const threads = data?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+    const ids = new Set<string>();
+    for (const thread of threads) {
+      if (thread?.isResolved) continue;
+      for (const comment of thread?.comments?.nodes ?? []) {
+        if (typeof comment?.id === "string" && comment.id.length > 0) {
+          ids.add(comment.id);
+        }
+      }
+    }
+    return ids;
+  } catch (error) {
+    logGhCliError(
+      `Failed to fetch unresolved review thread comment ids for PR #${prNumber} in ${repo}`,
+      error,
+    );
+    return null;
+  }
+}
+
 function mapPRState(state: string): "open" | "closed" | "merged" {
   const s = state.toLowerCase();
   if (s === "merged") return "merged";
@@ -253,6 +300,7 @@ export class GhCliGateway implements GitHubGateway {
     repo: string,
     prNumber: number,
   ): Promise<GitHubComment[]> {
+    const unresolvedNodeIds = fetchUnresolvedReviewCommentNodeIds(repo, prNumber);
     const raw = gh(
       [
         "api",
@@ -274,6 +322,9 @@ export class GhCliGateway implements GitHubGateway {
     return parseJSON<ApiReviewComment[]>(raw).map((c) => ({
       id: c.id,
       nodeId: c.node_id,
+      isResolved: unresolvedNodeIds
+        ? !c.node_id || !unresolvedNodeIds.has(c.node_id)
+        : undefined,
       author: c.user.login,
       body: c.body,
       createdAt: c.created_at,
@@ -281,70 +332,6 @@ export class GhCliGateway implements GitHubGateway {
       line: c.line ?? undefined,
       startLine: c.start_line ?? undefined,
     }));
-  }
-
-  async resolveReviewThreads(repo: string, prNumber: number, commentNodeIds: string[]): Promise<void> {
-    if (commentNodeIds.length === 0) return;
-
-    try {
-      // Fetch all review threads for the PR in a single query
-      const [owner, name] = repo.split("/");
-      const threadQuery = `
-        query($owner: String!, $name: String!, $prNumber: Int!) {
-          repository(owner: $owner, name: $name) {
-            pullRequest(number: $prNumber) {
-              reviewThreads(first: 100) {
-                nodes {
-                  id
-                  isResolved
-                  comments(first: 10) {
-                    nodes { id }
-                  }
-                }
-              }
-            }
-          }
-        }
-      `;
-      const threadRaw = execFileSync("gh", [
-        "api", "graphql",
-        "-f", `query=${threadQuery}`,
-        "-F", `owner=${owner}`,
-        "-F", `name=${name}`,
-        "-F", `prNumber=${prNumber}`,
-      ], { encoding: "utf-8" });
-      const threadData = JSON.parse(threadRaw);
-      const threads = threadData?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
-
-      const nodeIdSet = new Set(commentNodeIds);
-
-      for (const thread of threads) {
-        if (thread.isResolved) continue;
-        const threadCommentIds = (thread.comments?.nodes ?? []).map((n: { id: string }) => n.id);
-        if (threadCommentIds.some((id: string) => nodeIdSet.has(id))) {
-          try {
-            const mutation = `
-              mutation($threadId: ID!) {
-                resolveReviewThread(input: { threadId: $threadId }) {
-                  thread { isResolved }
-                }
-              }
-            `;
-            execFileSync("gh", [
-              "api", "graphql",
-              "-f", `query=${mutation}`,
-              "-F", `threadId=${thread.id}`,
-            ], { encoding: "utf-8" });
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            process.stderr.write(`[gh-cli] Failed to resolve thread ${thread.id}: ${msg}\n`);
-          }
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[gh-cli] Failed to fetch review threads: ${msg}\n`);
-    }
   }
 
   async checkBranchConflicts(repoPath: string, _branch: string, base: string): Promise<{ conflicted: boolean; conflictFiles: string[] }> {
@@ -382,14 +369,15 @@ export class GhCliGateway implements GitHubGateway {
     }
   }
 
-  async pushBranch(repoPath: string, branch: string, commitMessage?: string): Promise<void> {
+  async pushBranch(repoPath: string, branch: string, commitMessage?: string): Promise<{ pushedCommit: boolean; pushedSha?: string }> {
     // Commit any uncommitted changes before pushing
     const status = execFileSync("git", ["status", "--porcelain"], {
       cwd: repoPath,
       encoding: "utf-8",
     }).trim();
+    const pushedCommit = status.length > 0;
 
-    if (status.length > 0) {
+    if (pushedCommit) {
       execFileSync("git", ["add", "-A"], { cwd: repoPath, encoding: "utf-8" });
       execFileSync("git", ["commit", "-m", commitMessage ?? "feat: apply devagent changes"], {
         cwd: repoPath,
@@ -410,6 +398,16 @@ export class GhCliGateway implements GitHubGateway {
         encoding: "utf-8",
       });
     }
+
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoPath,
+      encoding: "utf-8",
+    }).trim();
+
+    return {
+      pushedCommit,
+      pushedSha: headSha || undefined,
+    };
   }
 
   async markPRReady(repo: string, prNumber: number): Promise<void> {

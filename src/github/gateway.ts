@@ -6,6 +6,11 @@ import type {
   CreatePRParams,
 } from "./types.js";
 
+export interface PushBranchResult {
+  pushedCommit: boolean;
+  pushedSha?: string;
+}
+
 export interface GitHubGateway {
   fetchIssue(repo: string, number: number): Promise<GitHubIssue>;
   fetchEligibleIssues(repo: string, labels: string[]): Promise<GitHubIssue[]>;
@@ -27,8 +32,7 @@ export interface GitHubGateway {
     repo: string,
     prNumber: number,
   ): Promise<GitHubComment[]>;
-  pushBranch(repoPath: string, branch: string, commitMessage?: string): Promise<void>;
-  resolveReviewThreads(repo: string, prNumber: number, commentNodeIds: string[]): Promise<void>;
+  pushBranch(repoPath: string, branch: string, commitMessage?: string): Promise<PushBranchResult>;
   checkBranchConflicts(repoPath: string, branch: string, base: string): Promise<{ conflicted: boolean; conflictFiles: string[] }>;
   markPRReady(repo: string, prNumber: number): Promise<void>;
   fetchCIFailureLogs(repo: string, prNumber: number): Promise<{ check: string; log: string }[]>;

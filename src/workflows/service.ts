@@ -14,7 +14,14 @@ import {
 import type { WorkflowConfig } from "../workflow/config.js";
 import { resolveSkills } from "../workflow/skill-resolver.js";
 import { CanonicalStore } from "../persistence/canonical-store.js";
-import type { Project, WorkItem, WorkflowBaselineSnapshot, WorkflowInstance } from "../canonical/types.js";
+import type {
+  PersistedExecutionResult,
+  Project,
+  RepairOutcome,
+  WorkItem,
+  WorkflowBaselineSnapshot,
+  WorkflowInstance,
+} from "../canonical/types.js";
 import type {
   ArtifactKind,
   ExecutorSpec,
@@ -122,10 +129,15 @@ export class WorkflowService {
   }
 
   async start(issueExternalId: string): Promise<WorkflowInstance> {
+    const workflow = await this.startDetached(issueExternalId);
+    return this.continue(workflow.id);
+  }
+
+  async startDetached(issueExternalId: string): Promise<WorkflowInstance> {
     const workItem = await this.ensureIssue(issueExternalId);
     const branch = `devagent/workflow/${workItem.externalId}-${randomUUID().slice(0, 8)}`;
     const baselineSnapshot = this.captureBaselineSnapshot("main");
-    let workflow = this.store.createWorkflowInstance({
+    return this.store.createWorkflowInstance({
       projectId: this.project.id,
       workItemId: workItem.id,
       stage: "triage",
@@ -135,34 +147,76 @@ export class WorkflowService {
       baseSha: baselineSnapshot.targetBaseSha,
       baselineSnapshot,
     });
+  }
 
-    workflow = await this.runStage(workflow, workItem, "triage");
-    if (isFailureStatus(workflow.status)) {
+  async continue(workflowId: string): Promise<WorkflowInstance> {
+    let workflow = this.store.getWorkflowInstance(workflowId);
+    if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+    const workItem = this.getWorkItem(workflow.workItemId);
+
+    if (workflow.status !== "running") {
       return workflow;
     }
 
-    workflow = this.store.updateWorkflowInstance(workflow.id, {
-      stage: "plan",
-      status: "running",
-      statusReason: undefined,
-    });
-    workflow = await this.runStage(workflow, workItem, "plan");
-    if (isFailureStatus(workflow.status)) {
-      return workflow;
-    }
+    this.assertWorkflowContinuationSafe(workflow, workflow.stage !== "triage");
 
-    this.store.createApproval({ workflowInstanceId: workflow.id, stage: "plan" });
-    return this.store.updateWorkflowInstance(workflow.id, {
-      stage: "plan",
-      status: "waiting_approval",
-      statusReason: undefined,
-    });
+    switch (workflow.stage) {
+      case "triage":
+        workflow = await this.runStage(workflow, workItem, "triage");
+        if (shouldStopProgress(workflow)) {
+          return workflow;
+        }
+        workflow = this.store.updateWorkflowInstance(workflow.id, {
+          stage: "plan",
+          status: "running",
+          statusReason: undefined,
+        });
+        workflow = await this.runStage(workflow, workItem, "plan");
+        if (isFailureStatus(workflow.status)) {
+          return workflow;
+        }
+        this.store.createApproval({ workflowInstanceId: workflow.id, stage: "plan" });
+        return this.store.updateWorkflowInstance(workflow.id, {
+          stage: "plan",
+          status: "waiting_approval",
+          statusReason: undefined,
+        });
+      case "plan":
+        workflow = await this.runStage(workflow, workItem, "plan");
+        if (isFailureStatus(workflow.status)) {
+          return workflow;
+        }
+        this.store.createApproval({ workflowInstanceId: workflow.id, stage: "plan" });
+        return this.store.updateWorkflowInstance(workflow.id, {
+          stage: "plan",
+          status: "waiting_approval",
+          statusReason: undefined,
+        });
+      case "implement":
+        workflow = await this.runStage(workflow, workItem, "implement");
+        if (shouldStopProgress(workflow)) {
+          return workflow;
+        }
+        workflow = await this.runVerifyReviewRepairLoop(workflow, workItem);
+        return workflow.status === "running"
+          ? this.pauseForReviewApproval(workflow)
+          : workflow;
+      case "verify":
+      case "review":
+      case "repair":
+        workflow = await this.runVerifyReviewRepairLoop(workflow, workItem);
+        return workflow.status === "running"
+          ? this.pauseForReviewApproval(workflow)
+          : workflow;
+      case "done":
+        return workflow;
+    }
   }
 
   async resume(workflowId: string): Promise<WorkflowInstance> {
     let workflow = this.store.getWorkflowInstance(workflowId);
     if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
-    this.assertWorkflowContinuationSafe(workflow);
+    this.assertWorkflowContinuationSafe(workflow, true);
     const pending = this.store.getPendingApproval(workflowId);
     const workItem = this.getWorkItem(workflow.workItemId);
 
@@ -206,7 +260,7 @@ export class WorkflowService {
   async reject(workflowId: string, note: string): Promise<WorkflowInstance> {
     let workflow = this.store.getWorkflowInstance(workflowId);
     if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
-    this.assertWorkflowContinuationSafe(workflow);
+    this.assertWorkflowContinuationSafe(workflow, true);
     const pending = this.store.getPendingApproval(workflowId);
     const workItem = this.getWorkItem(workflow.workItemId);
 
@@ -276,7 +330,7 @@ export class WorkflowService {
   async openPr(workflowId: string): Promise<WorkflowInstance> {
     let workflow = this.store.getWorkflowInstance(workflowId);
     if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
-    this.assertWorkflowContinuationSafe(workflow);
+    this.assertWorkflowContinuationSafe(workflow, true);
     const pending = this.store.getPendingApproval(workflowId);
     const snapshot = this.store.getWorkflowSnapshot(workflow.id);
     const latestReviewApproval = [...snapshot.approvals].reverse().find((approval) => approval.stage === "review");
@@ -321,7 +375,7 @@ export class WorkflowService {
   async repairPr(workflowId: string): Promise<WorkflowInstance> {
     let workflow = this.store.getWorkflowInstance(workflowId);
     if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
-    this.assertWorkflowContinuationSafe(workflow);
+    this.assertWorkflowContinuationSafe(workflow, true);
     if (!workflow.prNumber) {
       throw new Error("Workflow does not have an opened PR");
     }
@@ -336,10 +390,13 @@ export class WorkflowService {
       );
     }
     const ciFailureLogs = await this.github.fetchCIFailureLogs(this.project.repoFullName, prNumber);
-    const changedFilesHint = [...new Set(pr.reviewComments.flatMap((comment) => (comment.path ? [comment.path] : [])))];
+    const actionableComments = pr.reviewComments.filter((comment) => comment.isResolved !== true);
+    const unresolvedCommentCount = actionableComments.length;
+    const ciFailureCount = ciFailureLogs.length;
+    const changedFilesHint = [...new Set(actionableComments.flatMap((comment) => (comment.path ? [comment.path] : [])))];
 
-    if (pr.reviewComments.length === 0 && ciFailureLogs.length === 0) {
-      throw new Error(`PR #${workflow.prNumber} has no review comments or failing CI checks to repair`);
+    if (actionableComments.length === 0 && ciFailureLogs.length === 0) {
+      throw new Error(`PR #${workflow.prNumber} has no unresolved review comments or failing CI checks to repair`);
     }
 
     workflow = this.store.updateWorkflowInstance(workflow.id, {
@@ -351,16 +408,16 @@ export class WorkflowService {
       summary: `Repair PR #${pr.number} feedback for issue #${workItem.externalId}`,
       issueBody: [
         `PR: ${pr.url}`,
-        `Address all GitHub review comments and failing CI checks for branch ${pr.head}.`,
+        `Address the unresolved GitHub review comments and failing CI checks for branch ${pr.head}.`,
       ].join("\n"),
-      comments: pr.reviewComments.map((comment) => ({
+      comments: actionableComments.map((comment) => ({
         author: comment.author,
         body: this.formatReviewComment(comment),
       })),
       changedFilesHint,
       extraInstructions: [
-        `Resolve the feedback on PR #${pr.number}.`,
-        ...pr.reviewComments.map((comment) => this.reviewCommentInstruction(comment)),
+        `Resolve the unresolved feedback on PR #${pr.number}. Do not mark review threads resolved automatically; leave that to the operator after verifying the fix.`,
+        ...actionableComments.map((comment) => this.reviewCommentInstruction(comment)),
         ...ciFailureLogs.map((failure) => `CI failure in ${failure.check}:\n${failure.log}`),
       ],
     });
@@ -381,12 +438,13 @@ export class WorkflowService {
     }
 
     const branch = this.store.getWorkflowBranch(workflow.id);
-    await this.github.pushBranch(latestAttempt.workspacePath, branch, "fix: address PR feedback");
-    await this.github.resolveReviewThreads(
-      this.project.repoFullName,
-      prNumber,
-      pr.reviewComments.flatMap((comment) => (comment.nodeId ? [comment.nodeId] : [])),
-    );
+    const pushResult = await this.github.pushBranch(latestAttempt.workspacePath, branch, "fix: address PR feedback");
+    this.recordRepairOutcome(workflow.id, {
+      unresolvedCommentCount,
+      ciFailureCount,
+      pushedCommit: pushResult.pushedCommit,
+      pushedSha: pushResult.pushedSha,
+    });
     await this.runnerClient.cleanupRun(latestAttempt.runnerId);
     return this.store.updateWorkflowInstance(workflow.id, {
       stage: "done",
@@ -520,7 +578,22 @@ export class WorkflowService {
     };
   }
 
-  private assertWorkflowContinuationSafe(workflow: WorkflowInstance): void {
+  markWorkflowFailed(workflowId: string, message: string): WorkflowInstance {
+    const workflow = this.store.getWorkflowInstance(workflowId);
+    if (!workflow) {
+      throw new Error(`Workflow ${workflowId} not found`);
+    }
+
+    return this.store.updateWorkflowInstance(workflowId, {
+      status: "failed",
+      statusReason: message,
+    });
+  }
+
+  private assertWorkflowContinuationSafe(
+    workflow: WorkflowInstance,
+    requireWorkBranch: boolean,
+  ): void {
     const manifest = loadBaselineManifest();
     const current = readCurrentBaselineSystemSnapshot(manifest);
     const expected = workflow.baselineSnapshot.system;
@@ -545,7 +618,7 @@ export class WorkflowService {
       );
     }
 
-    if (!branchExists(this.project.repoRoot, workflow.branch)) {
+    if (requireWorkBranch && !branchExists(this.project.repoRoot, workflow.branch)) {
       throw new WorkflowStateError(
         "STALE_BRANCH_REF",
         `Workflow ${workflow.id} expects local branch ${workflow.branch}, but it no longer exists.`,
@@ -571,24 +644,29 @@ export class WorkflowService {
     workItem: WorkItem,
   ): Promise<WorkflowInstance> {
     while (true) {
-      workflow = this.store.updateWorkflowInstance(workflow.id, {
-        stage: "verify",
-        status: "running",
-        statusReason: undefined,
-      });
-      workflow = await this.runStage(workflow, workItem, "verify");
-      if (shouldStopProgress(workflow)) {
-        return workflow;
+      if (workflow.stage === "implement" || workflow.stage === "repair") {
+        workflow = this.store.updateWorkflowInstance(workflow.id, {
+          stage: "verify",
+          status: "running",
+          statusReason: undefined,
+        });
       }
-
-      workflow = this.store.updateWorkflowInstance(workflow.id, {
-        stage: "review",
-        status: "running",
-        statusReason: undefined,
-      });
-      workflow = await this.runStage(workflow, workItem, "review");
-      if (shouldStopProgress(workflow)) {
-        return workflow;
+      if (workflow.stage === "verify") {
+        workflow = await this.runStage(workflow, workItem, "verify");
+        if (shouldStopProgress(workflow)) {
+          return workflow;
+        }
+        workflow = this.store.updateWorkflowInstance(workflow.id, {
+          stage: "review",
+          status: "running",
+          statusReason: undefined,
+        });
+      }
+      if (workflow.stage === "review") {
+        workflow = await this.runStage(workflow, workItem, "review");
+        if (shouldStopProgress(workflow)) {
+          return workflow;
+        }
       }
 
       const requiresRepair = await this.reviewRequiresRepair(workflow.id);
@@ -621,6 +699,15 @@ export class WorkflowService {
         return workflow;
       }
     }
+  }
+
+  private pauseForReviewApproval(workflow: WorkflowInstance): WorkflowInstance {
+    this.store.createApproval({ workflowInstanceId: workflow.id, stage: "review" });
+    return this.store.updateWorkflowInstance(workflow.id, {
+      stage: "review",
+      status: "waiting_approval",
+      statusReason: undefined,
+    });
   }
 
   private async reviewRequiresRepair(workflowId: string): Promise<boolean> {
@@ -657,6 +744,24 @@ export class WorkflowService {
     }
     const content = await readFile(artifact.path, "utf-8");
     return [`${label}:\n${content.trim()}`];
+  }
+
+  private recordRepairOutcome(workflowId: string, repairOutcome: RepairOutcome): void {
+    const repairTask = [...this.store.listTasks(workflowId)]
+      .reverse()
+      .find((task) => task.type === "repair");
+    if (!repairTask) {
+      return;
+    }
+    const existingResult = this.store.getTaskResult(repairTask.id);
+    if (!existingResult) {
+      return;
+    }
+    const nextResult: PersistedExecutionResult = {
+      ...existingResult.result,
+      repairOutcome,
+    };
+    this.store.recordResult(repairTask.id, nextResult);
   }
 
   private async runStage(

@@ -7,7 +7,7 @@ import { CanonicalStore } from "../persistence/canonical-store.js";
 import { defaultConfig } from "../workflow/config.js";
 import { WorkflowService } from "../workflows/service.js";
 import { WorkflowStateError } from "../workflows/errors.js";
-import type { GitHubGateway } from "../github/gateway.js";
+import type { GitHubGateway, PushBranchResult } from "../github/gateway.js";
 import type { GitHubCheck, GitHubComment, GitHubIssue, GitHubPR } from "../github/types.js";
 import type { RunnerClient } from "../runner-client/types.js";
 import type { Project } from "../canonical/types.js";
@@ -70,6 +70,7 @@ class StubGitHubGateway implements GitHubGateway {
   public ciFailureLogs: Array<{ check: string; log: string }> = [];
   public prHead = "devagent/workflow/test-branch";
   public pushFailuresRemaining = 0;
+  public nextPushResult: PushBranchResult = { pushedCommit: true, pushedSha: "abc123" };
 
   constructor(private readonly issue: GitHubIssue) {}
 
@@ -125,16 +126,13 @@ class StubGitHubGateway implements GitHubGateway {
     return this.reviewComments;
   }
 
-  async pushBranch(repoPath: string, branch: string): Promise<void> {
+  async pushBranch(repoPath: string, branch: string): Promise<PushBranchResult> {
     if (this.pushFailuresRemaining > 0) {
       this.pushFailuresRemaining -= 1;
       throw new Error("simulated push failure");
     }
     this.pushedBranches.push({ repoPath, branch });
-  }
-
-  async resolveReviewThreads(repo: string, prNumber: number, commentNodeIds: string[]): Promise<void> {
-    this.resolvedThreads.push({ repo, prNumber, nodeIds: commentNodeIds });
+    return this.nextPushResult;
   }
 
   async checkBranchConflicts(): Promise<{ conflicted: boolean; conflictFiles: string[] }> {
@@ -508,6 +506,55 @@ describe("WorkflowService", () => {
     expect(snapshot.tasks.map((task) => task.type)).toEqual(["triage", "plan"]);
     expect(snapshot.approvals).toHaveLength(1);
     expect(snapshot.events.length).toBeGreaterThan(0);
+
+    store.close();
+  });
+
+  it("creates a detached workflow immediately before any tasks run", async () => {
+    const { store, service, runner } = await createService();
+
+    const workflow = await service.startDetached("42");
+    const snapshot = service.getSnapshot(workflow.id);
+
+    expect(workflow.status).toBe("running");
+    expect(workflow.stage).toBe("triage");
+    expect(snapshot.tasks).toHaveLength(0);
+    expect(snapshot.artifacts).toHaveLength(0);
+    expect(snapshot.events).toHaveLength(0);
+    expect(runner.startedRequests).toHaveLength(0);
+
+    store.close();
+  });
+
+  it("continues a detached workflow through plan approval", async () => {
+    const { store, service } = await createService();
+
+    const started = await service.startDetached("42");
+    const continued = await service.continue(started.id);
+    const snapshot = service.getSnapshot(started.id);
+
+    expect(continued.status).toBe("waiting_approval");
+    expect(continued.stage).toBe("plan");
+    expect(snapshot.tasks.map((task) => task.type)).toEqual(["triage", "plan"]);
+
+    store.close();
+  });
+
+  it("records executor selection from profile bin mappings", async () => {
+    const { store, service, config, runner } = await createService();
+    config.profiles.codex = {
+      bin: "/Applications/Codex.app/Contents/Resources/codex",
+      model: "gpt-5-codex",
+    };
+    config.roles.plan = "codex";
+
+    const workflow = await service.start("42");
+    const snapshot = service.getSnapshot(workflow.id);
+    const planTask = snapshot.tasks.find((task) => task.type === "plan");
+
+    expect(planTask?.executorId).toBe("codex");
+    expect(runner.startedRequests.find((request) => request.taskType === "plan")?.executor.profileName).toBe("codex");
+    expect(runner.startedRequests.find((request) => request.taskType === "plan")?.executor.executorId).toBe("codex");
 
     store.close();
   });
@@ -957,14 +1004,99 @@ describe("WorkflowService", () => {
       "review",
     ]);
     expect(github.pushedBranches).toHaveLength(2);
-    expect(github.resolvedThreads).toHaveLength(1);
-    expect(github.resolvedThreads[0]?.nodeIds).toEqual(["PRRC_kwDOExample"]);
+    expect(github.resolvedThreads).toHaveLength(0);
     expect(runner.cleanedRuns).toHaveLength(2);
     expect(runner.startedRequests.at(-3)?.taskType).toBe("repair");
     expect(runner.startedRequests.at(-3)?.context.comments?.[0]?.body).toContain("src/cli/index.ts:25");
     expect(runner.startedRequests.at(-3)?.context.changedFilesHint).toEqual(["src/cli/index.ts"]);
     expect(runner.startedRequests.at(-3)?.context.extraInstructions?.join("\n")).toContain("Typecheck, Test, Build");
     expect(runner.startedRequests.at(-3)?.context.extraInstructions?.join("\n")).toContain("src/cli/index.ts:25");
+    const repairTask = [...snapshot.tasks].reverse().find((task) => task.type === "repair");
+    const repairResult = snapshot.results.find((result) => result.taskId === repairTask?.id);
+    expect(repairResult?.result.repairOutcome).toEqual({
+      unresolvedCommentCount: 1,
+      ciFailureCount: 1,
+      pushedCommit: true,
+      pushedSha: "abc123",
+    });
+
+    store.close();
+  }, 15_000);
+
+  it("records a successful no-op repair outcome when no commit is pushed", async () => {
+    const { store, service, github } = await createService([
+      "No defects found.",
+      "No defects found.",
+    ]);
+    const started = await service.start("42");
+    await service.resume(started.id);
+    await service.openPr(started.id);
+
+    github.reviewComments = [{
+      id: 1,
+      nodeId: "PRRC_kwDONoop",
+      isResolved: false,
+      author: "reviewer",
+      body: "Nit: double-check this wording.",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      path: "README.md",
+      line: 4,
+    }];
+    github.nextPushResult = { pushedCommit: false };
+    await service.repairPr(started.id);
+
+    const snapshot = service.getSnapshot(started.id);
+    const repairTask = [...snapshot.tasks].reverse().find((task) => task.type === "repair");
+    const repairResult = snapshot.results.find((result) => result.taskId === repairTask?.id);
+
+    expect(repairResult?.result.repairOutcome).toEqual({
+      unresolvedCommentCount: 1,
+      ciFailureCount: 0,
+      pushedCommit: false,
+    });
+
+    store.close();
+  }, 15_000);
+
+  it("ignores resolved review comments when building repair context", async () => {
+    const { store, service, github, runner } = await createService([
+      "No defects found.",
+      "No defects found.",
+    ]);
+    const started = await service.start("42");
+    await service.resume(started.id);
+    await service.openPr(started.id);
+
+    github.reviewComments = [
+      {
+        id: 1,
+        nodeId: "PRRC_kwDOResolved",
+        isResolved: true,
+        author: "reviewer",
+        body: "Old resolved note.",
+        createdAt: "2026-03-10T00:00:00.000Z",
+        path: "README.md",
+        line: 3,
+      },
+      {
+        id: 2,
+        nodeId: "PRRC_kwDOOpen",
+        isResolved: false,
+        author: "reviewer",
+        body: "Please fix the branch naming guidance.",
+        createdAt: "2026-03-10T00:00:01.000Z",
+        path: "src/cli/index.ts",
+        line: 25,
+      },
+    ];
+
+    await service.repairPr(started.id);
+
+    const repairRequest = runner.startedRequests.at(-3);
+    expect(repairRequest?.taskType).toBe("repair");
+    expect(repairRequest?.context.comments).toHaveLength(1);
+    expect(repairRequest?.context.comments?.[0]?.body).toContain("src/cli/index.ts:25");
+    expect(repairRequest?.context.extraInstructions?.join("\n")).not.toContain("Old resolved note.");
 
     store.close();
   }, 15_000);

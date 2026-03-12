@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
-import { CanonicalStore } from "../persistence/canonical-store.js";
+import { CanonicalStore, ProjectRegistrationConflictError } from "../persistence/canonical-store.js";
 import { PROTOCOL_VERSION, type TaskExecutionEvent, type TaskExecutionResult } from "@devagent-sdk/types";
 
 const paths: string[] = [];
@@ -171,5 +171,29 @@ describe("CanonicalStore", () => {
     expect(snapshot.workflow.branch).toBe("devagent/workflow/99-test");
     expect(snapshot.approvals).toHaveLength(1);
     reopened.close();
+  });
+
+  it("rejects overwriting a registered repo with a different local clone", async () => {
+    const { store } = await createStore();
+    store.upsertProject({
+      id: "org/repo",
+      name: "repo",
+      repoRoot: "/tmp/repo-a",
+      repoFullName: "org/repo",
+      allowedExecutors: ["devagent"],
+    });
+
+    expect(() =>
+      store.upsertProject({
+        id: "org/repo",
+        name: "repo",
+        repoRoot: "/tmp/repo-b",
+        repoFullName: "org/repo",
+        allowedExecutors: ["devagent"],
+      }),
+    ).toThrow(ProjectRegistrationConflictError);
+    expect(store.getProject("org/repo")?.repoRoot).toBe("/tmp/repo-a");
+
+    store.close();
   });
 });

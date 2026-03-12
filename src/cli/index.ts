@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -66,7 +66,7 @@ function createService(): { store: CanonicalStore; service: WorkflowService } {
     service: new WorkflowService(
       store,
       new GhCliGateway(),
-      new LocalRunnerClient(),
+      new LocalRunnerClient(config),
       project,
       config,
     ),
@@ -80,6 +80,25 @@ function createStore(): CanonicalStore {
 
 function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
+}
+
+function spawnDetachedContinue(workflowId: string): void {
+  const scriptPath = process.argv[1];
+  if (!scriptPath) {
+    throw new Error("Unable to determine devagent-hub CLI entrypoint for detached continuation.");
+  }
+
+  const child = spawn(
+    process.execPath,
+    [scriptPath, "run", "continue", workflowId],
+    {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: "ignore",
+      env: process.env,
+    },
+  );
+  child.unref();
 }
 
 function formatStatus(view: ReturnType<WorkflowService["getStatusView"]>): string {
@@ -121,7 +140,8 @@ Commands:
   list-projects [--json]
   issue sync
   list-issues --project <projectId> [--json]
-  run start --issue <number>
+  run start --issue <number> [--detach]
+  run continue <id>
   run resume <id>
   run reject <id> --note <text>
   run cancel <id>
@@ -172,14 +192,43 @@ if (command === "issue" && subcommand === "sync") {
 }
 
 if (command === "run" && subcommand === "start") {
+  const detached = hasFlag(args, "--detach");
   const issueNumber = argValue(args, "--issue");
   if (!issueNumber) {
     throw new Error("Usage: devagent-hub run start --issue <number>");
   }
   const { store, service } = createService();
   try {
-    const workflow = await service.start(issueNumber);
+    const workflow = detached
+      ? await service.startDetached(issueNumber)
+      : await service.start(issueNumber);
+    if (detached) {
+      spawnDetachedContinue(workflow.id);
+    }
     console.log(JSON.stringify(workflow, null, 2));
+  } finally {
+    store.close();
+  }
+  process.exit(0);
+}
+
+if (command === "run" && subcommand === "continue") {
+  const workflowId = args[0];
+  if (!workflowId) {
+    throw new Error("Usage: devagent-hub run continue <id>");
+  }
+  const { store, service } = createService();
+  try {
+    const workflow = await service.continue(workflowId);
+    console.log(JSON.stringify(workflow, null, 2));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      service.markWorkflowFailed(workflowId, message);
+    } catch {
+      // Ignore secondary persistence failures — preserve the original error.
+    }
+    throw error;
   } finally {
     store.close();
   }

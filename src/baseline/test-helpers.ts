@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { RunnerClient } from "../runner-client/types.js";
-import type { GitHubGateway } from "../github/gateway.js";
+import type { GitHubGateway, PushBranchResult } from "../github/gateway.js";
 import type { GitHubCheck, GitHubComment, GitHubIssue, GitHubPR } from "../github/types.js";
 import { CanonicalStore } from "../persistence/canonical-store.js";
 import { WorkflowService } from "../workflows/service.js";
@@ -134,8 +134,9 @@ export class HarnessGitHubGateway implements GitHubGateway {
     return [];
   }
 
-  async pushBranch(): Promise<void> {}
-  async resolveReviewThreads(): Promise<void> {}
+  async pushBranch(): Promise<PushBranchResult> {
+    return { pushedCommit: false };
+  }
   async checkBranchConflicts(): Promise<{ conflicted: boolean; conflictFiles: string[] }> {
     return { conflicted: false, conflictFiles: [] };
   }
