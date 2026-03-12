@@ -512,6 +512,25 @@ describe("WorkflowService", () => {
     store.close();
   });
 
+  it("records executor selection from profile bin mappings", async () => {
+    const { store, service, config, runner } = await createService();
+    config.profiles.codex = {
+      bin: "/Applications/Codex.app/Contents/Resources/codex",
+      model: "gpt-5-codex",
+    };
+    config.roles.plan = "codex";
+
+    const workflow = await service.start("42");
+    const snapshot = service.getSnapshot(workflow.id);
+    const planTask = snapshot.tasks.find((task) => task.type === "plan");
+
+    expect(planTask?.executorId).toBe("codex");
+    expect(runner.startedRequests.find((request) => request.taskType === "plan")?.executor.profileName).toBe("codex");
+    expect(runner.startedRequests.find((request) => request.taskType === "plan")?.executor.executorId).toBe("codex");
+
+    store.close();
+  });
+
   it("builds a human-readable status view for plan review", async () => {
     const { store, service } = await createService();
     const workflow = await service.start("42");

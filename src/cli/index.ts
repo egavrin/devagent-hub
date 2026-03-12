@@ -66,7 +66,7 @@ function createService(): { store: CanonicalStore; service: WorkflowService } {
     service: new WorkflowService(
       store,
       new GhCliGateway(),
-      new LocalRunnerClient(),
+      new LocalRunnerClient(config),
       project,
       config,
     ),
