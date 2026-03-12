@@ -1,4 +1,4 @@
-IMPORTANT: Read and follow all instructions in @AGENTS.md before starting any task.
+IMPORTANT: Read and follow all instructions in `AGENTS.md` before starting any task.
 
 This repository uses `AGENTS.md` as the primary agent instruction source.
 
