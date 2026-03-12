@@ -117,6 +117,20 @@ function deserializeBaselineSnapshot(raw: string): WorkflowBaselineSnapshot {
   return JSON.parse(raw) as WorkflowBaselineSnapshot;
 }
 
+export class ProjectRegistrationConflictError extends Error {
+  constructor(
+    readonly repoFullName: string,
+    readonly existingRepoRoot: string,
+    readonly attemptedRepoRoot: string,
+  ) {
+    super(
+      `Project "${repoFullName}" is already registered at "${existingRepoRoot}". ` +
+      `Refusing to overwrite it with "${attemptedRepoRoot}". Remove the existing registration or use a single local clone for this GitHub repo.`,
+    );
+    this.name = "ProjectRegistrationConflictError";
+  }
+}
+
 type PragmaColumnRow = {
   name: string;
 };
@@ -370,6 +384,15 @@ export class CanonicalStore {
   }
 
   upsertProject(project: Project): Project {
+    const existing = this.getProject(project.id);
+    if (existing && existing.repoRoot !== project.repoRoot) {
+      throw new ProjectRegistrationConflictError(
+        project.repoFullName,
+        existing.repoRoot,
+        project.repoRoot,
+      );
+    }
+
     this.db.prepare(`
       INSERT INTO projects (id, name, repo_root, repo_full_name, workflow_config_path, allowed_executors_json)
       VALUES (?, ?, ?, ?, ?, ?)

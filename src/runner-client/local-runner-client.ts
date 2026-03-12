@@ -7,14 +7,17 @@ import {
   OpenCodeAdapter,
 } from "@devagent-runner/adapters";
 import type { TaskExecutionEvent, TaskExecutionRequest, TaskExecutionResult } from "@devagent-sdk/types";
-import { loadBaselineManifest, resolveBaselineRepoPath, resolveWorkspaceRoot } from "../baseline/manifest.js";
+import { resolveBaselineRepoPath, resolveWorkspaceRoot } from "../baseline/manifest.js";
 import type { RunnerClient } from "./types.js";
+import type { WorkflowConfig } from "../workflow/config.js";
 
 export class LocalRunnerClient implements RunnerClient {
   private readonly runner: LocalRunner;
 
-  constructor(devagentCliPath?: string) {
-    const manifest = loadBaselineManifest();
+  constructor(
+    private readonly config: WorkflowConfig,
+    devagentCliPath?: string,
+  ) {
     const workspaceRoot = resolveWorkspaceRoot();
     const resolvedDevagentCliPath = devagentCliPath ?? join(
       resolveBaselineRepoPath("devagent", workspaceRoot),
@@ -26,11 +29,18 @@ export class LocalRunnerClient implements RunnerClient {
     this.runner = new LocalRunner({
       adapters: [
         new DevAgentAdapter(`bun ${resolvedDevagentCliPath}`),
-        new CodexAdapter(),
-        new ClaudeAdapter(),
-        new OpenCodeAdapter(),
+        new CodexAdapter((request) => this.resolveCommand(request)),
+        new ClaudeAdapter((request) => this.resolveCommand(request)),
+        new OpenCodeAdapter((request) => this.resolveCommand(request)),
       ],
     });
+  }
+
+  private resolveCommand(request: TaskExecutionRequest): string | undefined {
+    const profile = request.executor.profileName
+      ? this.config.profiles[request.executor.profileName]
+      : undefined;
+    return profile?.bin ?? this.config.runner.bin;
   }
 
   startTask(request: TaskExecutionRequest): Promise<{ runId: string }> {
