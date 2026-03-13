@@ -30,7 +30,9 @@ describe("CanonicalStore", () => {
     });
     const workItem = store.upsertWorkItem({
       id: "org/repo:issue:42",
+      workspaceId: project.id,
       projectId: project.id,
+      repositoryId: `${project.id}:primary`,
       kind: "github-issue",
       externalId: "42",
       title: "Fix workflow",
@@ -40,6 +42,8 @@ describe("CanonicalStore", () => {
     });
     const workflow = store.createWorkflowInstance({
       projectId: project.id,
+      workspaceId: project.id,
+      parentWorkItemId: workItem.id,
       workItemId: workItem.id,
       stage: "triage",
       status: "running",
@@ -134,7 +138,9 @@ describe("CanonicalStore", () => {
     });
     const workItem = store.upsertWorkItem({
       id: "org/repo:issue:99",
+      workspaceId: project.id,
       projectId: project.id,
+      repositoryId: `${project.id}:primary`,
       kind: "github-issue",
       externalId: "99",
       title: "Recover me",
@@ -144,6 +150,8 @@ describe("CanonicalStore", () => {
     });
     const workflow = store.createWorkflowInstance({
       projectId: project.id,
+      workspaceId: project.id,
+      parentWorkItemId: workItem.id,
       workItemId: workItem.id,
       stage: "plan",
       status: "waiting_approval",
@@ -193,6 +201,79 @@ describe("CanonicalStore", () => {
       }),
     ).toThrow(ProjectRegistrationConflictError);
     expect(store.getProject("org/repo")?.repoRoot).toBe("/tmp/repo-a");
+
+    store.close();
+  });
+
+  it("creates local tasks with an empty link instead of a null URL", async () => {
+    const { store } = await createStore();
+    store.upsertWorkspace({
+      id: "workspace-1",
+      name: "workspace",
+      provider: "local",
+      primaryRepositoryId: "workspace-1:primary",
+      allowedExecutors: ["devagent"],
+    });
+
+    const task = store.createLocalTask({
+      workspaceId: "workspace-1",
+      title: "Manual task",
+      description: "Track local-only work",
+    });
+
+    expect(task.kind).toBe("local-task");
+    expect(task.url).toBe(`local-task://workspace-1/${task.externalId}`);
+
+    store.close();
+  });
+
+  it("stores imported reviewables with distinct ids across repositories", async () => {
+    const { store } = await createStore();
+    store.upsertWorkspace({
+      id: "workspace-1",
+      name: "workspace-1",
+      provider: "github",
+      primaryRepositoryId: "workspace-1:primary",
+      allowedExecutors: ["devagent"],
+    });
+    store.upsertWorkspace({
+      id: "workspace-2",
+      name: "workspace-2",
+      provider: "github",
+      primaryRepositoryId: "workspace-2:primary",
+      allowedExecutors: ["devagent"],
+    });
+
+    const first = store.upsertReviewable({
+      id: "workspace-1:reviewable:workspace-1:primary:10",
+      workspaceId: "workspace-1",
+      repositoryId: "workspace-1:primary",
+      provider: "github",
+      type: "github-pr",
+      externalId: "10",
+      title: "PR 10",
+      url: "https://github.com/org/repo/pull/10",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      updatedAt: "2026-03-10T00:00:00.000Z",
+    });
+    const second = store.upsertReviewable({
+      id: "workspace-2:reviewable:workspace-2:primary:10",
+      workspaceId: "workspace-2",
+      repositoryId: "workspace-2:primary",
+      provider: "github",
+      type: "github-pr",
+      externalId: "10",
+      title: "PR 10",
+      url: "https://github.com/org/other/pull/10",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      updatedAt: "2026-03-10T00:00:00.000Z",
+    });
+
+    expect(first.id).not.toBe(second.id);
+    expect(store.listReviewables("workspace-1")).toHaveLength(1);
+    expect(store.listReviewables("workspace-2")).toHaveLength(1);
+    expect(store.getReviewable(first.id)?.repositoryId).toBe("workspace-1:primary");
+    expect(store.getReviewable(second.id)?.repositoryId).toBe("workspace-2:primary");
 
     store.close();
   });

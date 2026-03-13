@@ -7,10 +7,14 @@ import type {
   PersistedTaskEvent,
   PersistedTaskResult,
   Project,
+  Repository,
+  Reviewable,
   Task,
   WorkItem,
+  WorkflowGroup,
   WorkflowBaselineSnapshot,
   WorkflowInstance,
+  Workspace,
 } from "../canonical/types.js";
 import type { ArtifactRef, TaskExecutionEvent, WorkflowTaskType } from "@devagent-sdk/types";
 
@@ -24,21 +28,63 @@ CREATE TABLE IF NOT EXISTS projects (
   allowed_executors_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS workspaces (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  primary_repository_id TEXT,
+  workflow_config_path TEXT,
+  allowed_executors_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS repositories (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  alias TEXT NOT NULL,
+  name TEXT NOT NULL,
+  repo_root TEXT NOT NULL,
+  repo_full_name TEXT,
+  default_branch TEXT,
+  provider TEXT
+);
+
 CREATE TABLE IF NOT EXISTS work_items (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
+  workspace_id TEXT,
+  repository_id TEXT,
   kind TEXT NOT NULL,
   external_id TEXT NOT NULL,
   title TEXT NOT NULL,
   state TEXT NOT NULL,
   labels_json TEXT NOT NULL,
-  url TEXT NOT NULL
+  url TEXT,
+  description TEXT,
+  created_at TEXT,
+  updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS reviewables (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  repository_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  type TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  url TEXT NOT NULL,
+  state TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS workflow_instances (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
+  workspace_id TEXT,
+  parent_work_item_id TEXT,
   work_item_id TEXT NOT NULL,
+  reviewable_id TEXT,
   stage TEXT NOT NULL,
   status TEXT NOT NULL,
   status_reason TEXT,
@@ -48,6 +94,9 @@ CREATE TABLE IF NOT EXISTS workflow_instances (
   branch TEXT NOT NULL,
   base_branch TEXT NOT NULL,
   base_sha TEXT NOT NULL,
+  target_repository_ids_json TEXT,
+  superseded_by_workflow_id TEXT,
+  archived_at TEXT,
   baseline_snapshot_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -72,7 +121,8 @@ CREATE TABLE IF NOT EXISTS execution_attempts (
   finished_at TEXT,
   status TEXT NOT NULL,
   result_path TEXT,
-  workspace_path TEXT
+  workspace_path TEXT,
+  event_log_path TEXT
 );
 
 CREATE TABLE IF NOT EXISTS approvals (
@@ -105,6 +155,10 @@ CREATE TABLE IF NOT EXISTS task_results (
   created_at TEXT NOT NULL
 );
 `;
+
+function localTaskUrl(workspaceId: string, externalId: string): string {
+  return `local-task://${workspaceId}/${externalId}`;
+}
 
 function now(): string {
   return new Date().toISOString();
@@ -145,21 +199,63 @@ type ProjectRow = {
   allowed_executors_json: string;
 };
 
+type WorkspaceRow = {
+  id: string;
+  name: string;
+  provider: Workspace["provider"];
+  primary_repository_id: string | null;
+  workflow_config_path: string | null;
+  allowed_executors_json: string;
+};
+
+type RepositoryRow = {
+  id: string;
+  workspace_id: string;
+  alias: string;
+  name: string;
+  repo_root: string;
+  repo_full_name: string | null;
+  default_branch: string | null;
+  provider: Repository["provider"] | null;
+};
+
 type WorkItemRow = {
   id: string;
   project_id: string;
+  workspace_id: string | null;
+  repository_id: string | null;
   kind: WorkItem["kind"];
   external_id: string;
   title: string;
   state: WorkItem["state"];
   labels_json: string;
+  url: string | null;
+  description: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type ReviewableRow = {
+  id: string;
+  workspace_id: string;
+  repository_id: string;
+  provider: Reviewable["provider"];
+  type: Reviewable["type"];
+  external_id: string;
+  title: string;
   url: string;
+  state: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 type WorkflowInstanceRow = {
   id: string;
   project_id: string;
+  workspace_id: string | null;
+  parent_work_item_id: string | null;
   work_item_id: string;
+  reviewable_id: string | null;
   stage: WorkflowInstance["stage"];
   status: WorkflowInstance["status"];
   status_reason: string | null;
@@ -169,6 +265,9 @@ type WorkflowInstanceRow = {
   branch: string;
   base_branch: string;
   base_sha: string;
+  target_repository_ids_json: string | null;
+  superseded_by_workflow_id: string | null;
+  archived_at: string | null;
   baseline_snapshot_json: string;
   created_at: string;
   updated_at: string;
@@ -198,6 +297,7 @@ type ExecutionAttemptRow = {
   status: ExecutionAttempt["status"];
   result_path: string | null;
   workspace_path: string | null;
+  event_log_path: string | null;
 };
 
 type ApprovalRow = {
@@ -238,24 +338,77 @@ function mapProjectRow(row: ProjectRow): Project {
   };
 }
 
-function mapWorkItemRow(row: WorkItemRow): WorkItem {
+function mapWorkspaceRow(row: WorkspaceRow): Workspace {
   return {
     id: row.id,
+    name: row.name,
+    provider: row.provider,
+    primaryRepositoryId: row.primary_repository_id ?? undefined,
+    workflowConfigPath: row.workflow_config_path ?? undefined,
+    allowedExecutors: JSON.parse(row.allowed_executors_json) as Workspace["allowedExecutors"],
+  };
+}
+
+function mapRepositoryRow(row: RepositoryRow): Repository {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    alias: row.alias,
+    name: row.name,
+    repoRoot: row.repo_root,
+    repoFullName: row.repo_full_name ?? undefined,
+    defaultBranch: row.default_branch ?? undefined,
+    provider: row.provider ?? undefined,
+  };
+}
+
+function mapWorkItemRow(row: WorkItemRow): WorkItem {
+  const workspaceId = row.workspace_id ?? row.project_id;
+  const normalizedUrl =
+    row.kind === "local-task" && (!row.url || row.url.length === 0)
+      ? localTaskUrl(workspaceId, row.external_id)
+      : row.url ?? undefined;
+  return {
+    id: row.id,
+    workspaceId,
     projectId: row.project_id,
+    repositoryId: row.repository_id ?? undefined,
     kind: row.kind,
     externalId: row.external_id,
     title: row.title,
     state: row.state,
     labels: JSON.parse(row.labels_json) as string[],
+    url: normalizedUrl,
+    description: row.description ?? undefined,
+    createdAt: row.created_at ?? undefined,
+    updatedAt: row.updated_at ?? undefined,
+  };
+}
+
+function mapReviewableRow(row: ReviewableRow): Reviewable {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    repositoryId: row.repository_id,
+    provider: row.provider,
+    type: row.type,
+    externalId: row.external_id,
+    title: row.title,
     url: row.url,
+    state: row.state ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
 function mapWorkflowInstanceRow(row: WorkflowInstanceRow): WorkflowInstance {
   return {
     id: row.id,
+    workspaceId: row.workspace_id ?? row.project_id,
     projectId: row.project_id,
+    parentWorkItemId: row.parent_work_item_id ?? undefined,
     workItemId: row.work_item_id,
+    reviewableId: row.reviewable_id ?? undefined,
     stage: row.stage,
     status: row.status,
     statusReason: row.status_reason ?? undefined,
@@ -265,6 +418,11 @@ function mapWorkflowInstanceRow(row: WorkflowInstanceRow): WorkflowInstance {
     branch: row.branch,
     baseBranch: row.base_branch,
     baseSha: row.base_sha,
+    targetRepositoryIds: row.target_repository_ids_json
+      ? JSON.parse(row.target_repository_ids_json) as string[]
+      : undefined,
+    supersededByWorkflowId: row.superseded_by_workflow_id ?? undefined,
+    archivedAt: row.archived_at ?? undefined,
     baselineSnapshot: deserializeBaselineSnapshot(row.baseline_snapshot_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -294,6 +452,7 @@ function mapExecutionAttemptRow(row: ExecutionAttemptRow): ExecutionAttempt {
     status: row.status,
     resultPath: row.result_path ?? undefined,
     workspacePath: row.workspace_path ?? undefined,
+    eventLogPath: row.event_log_path ?? undefined,
   };
 }
 
@@ -338,7 +497,9 @@ export class CanonicalStore {
   constructor(path: string) {
     this.db = new Database(path);
     this.db.exec(SCHEMA);
+    this.ensureWorkItemColumns();
     this.ensureWorkflowColumns();
+    this.ensureExecutionAttemptColumns();
   }
 
   close(): void {
@@ -382,6 +543,61 @@ export class CanonicalStore {
         `ALTER TABLE workflow_instances ADD COLUMN baseline_snapshot_json TEXT NOT NULL DEFAULT '${serializeBaselineSnapshot(fallback).replace(/'/g, "''")}'`,
       );
     }
+    if (!names.has("workspace_id")) {
+      this.db.exec("ALTER TABLE workflow_instances ADD COLUMN workspace_id TEXT");
+    }
+    if (!names.has("parent_work_item_id")) {
+      this.db.exec("ALTER TABLE workflow_instances ADD COLUMN parent_work_item_id TEXT");
+    }
+    if (!names.has("reviewable_id")) {
+      this.db.exec("ALTER TABLE workflow_instances ADD COLUMN reviewable_id TEXT");
+    }
+    if (!names.has("target_repository_ids_json")) {
+      this.db.exec("ALTER TABLE workflow_instances ADD COLUMN target_repository_ids_json TEXT");
+    }
+    if (!names.has("superseded_by_workflow_id")) {
+      this.db.exec("ALTER TABLE workflow_instances ADD COLUMN superseded_by_workflow_id TEXT");
+    }
+    if (!names.has("archived_at")) {
+      this.db.exec("ALTER TABLE workflow_instances ADD COLUMN archived_at TEXT");
+    }
+  }
+
+  private ensureWorkItemColumns(): void {
+    const columns = this.db.prepare("PRAGMA table_info(work_items)").all() as PragmaColumnRow[];
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has("workspace_id")) {
+      this.db.exec("ALTER TABLE work_items ADD COLUMN workspace_id TEXT");
+    }
+    if (!names.has("repository_id")) {
+      this.db.exec("ALTER TABLE work_items ADD COLUMN repository_id TEXT");
+    }
+    if (!names.has("description")) {
+      this.db.exec("ALTER TABLE work_items ADD COLUMN description TEXT");
+    }
+    if (!names.has("created_at")) {
+      this.db.exec("ALTER TABLE work_items ADD COLUMN created_at TEXT");
+    }
+    if (!names.has("updated_at")) {
+      this.db.exec("ALTER TABLE work_items ADD COLUMN updated_at TEXT");
+    }
+    if (!names.has("url")) {
+      this.db.exec("ALTER TABLE work_items ADD COLUMN url TEXT");
+    }
+  }
+
+  private ensureExecutionAttemptColumns(): void {
+    const columns = this.db.prepare("PRAGMA table_info(execution_attempts)").all() as PragmaColumnRow[];
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has("event_log_path")) {
+      try {
+        this.db.exec("ALTER TABLE execution_attempts ADD COLUMN event_log_path TEXT");
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("duplicate column name: event_log_path")) {
+          throw error;
+        }
+      }
+    }
   }
 
   upsertProject(project: Project): Project {
@@ -411,6 +627,27 @@ export class CanonicalStore {
       project.workflowConfigPath ?? null,
       JSON.stringify(project.allowedExecutors),
     );
+
+    const primaryRepositoryId = `${project.id}:primary`;
+    this.upsertWorkspace({
+      id: project.id,
+      name: project.name,
+      provider: "github",
+      primaryRepositoryId,
+      workflowConfigPath: project.workflowConfigPath,
+      allowedExecutors: project.allowedExecutors,
+    });
+    this.upsertRepository({
+      id: primaryRepositoryId,
+      workspaceId: project.id,
+      alias: "primary",
+      name: project.name,
+      repoRoot: project.repoRoot,
+      repoFullName: project.repoFullName,
+      defaultBranch: "main",
+      provider: "github",
+    });
+
     return project;
   }
 
@@ -423,24 +660,101 @@ export class CanonicalStore {
     return row ? mapProjectRow(row) : undefined;
   }
 
-  upsertWorkItem(workItem: WorkItem): WorkItem {
+  upsertWorkspace(workspace: Workspace): Workspace {
     this.db.prepare(`
-      INSERT INTO work_items (id, project_id, kind, external_id, title, state, labels_json, url)
+      INSERT INTO workspaces (id, name, provider, primary_repository_id, workflow_config_path, allowed_executors_json)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        provider = excluded.provider,
+        primary_repository_id = excluded.primary_repository_id,
+        workflow_config_path = excluded.workflow_config_path,
+        allowed_executors_json = excluded.allowed_executors_json
+    `).run(
+      workspace.id,
+      workspace.name,
+      workspace.provider,
+      workspace.primaryRepositoryId ?? null,
+      workspace.workflowConfigPath ?? null,
+      JSON.stringify(workspace.allowedExecutors),
+    );
+    return workspace;
+  }
+
+  listWorkspaces(): Workspace[] {
+    return (this.db.prepare("SELECT * FROM workspaces ORDER BY name").all() as WorkspaceRow[]).map(mapWorkspaceRow);
+  }
+
+  getWorkspace(id: string): Workspace | undefined {
+    const row = this.db.prepare("SELECT * FROM workspaces WHERE id = ?").get(id) as WorkspaceRow | undefined;
+    return row ? mapWorkspaceRow(row) : undefined;
+  }
+
+  upsertRepository(repository: Repository): Repository {
+    this.db.prepare(`
+      INSERT INTO repositories (id, workspace_id, alias, name, repo_root, repo_full_name, default_branch, provider)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
+        workspace_id = excluded.workspace_id,
+        alias = excluded.alias,
+        name = excluded.name,
+        repo_root = excluded.repo_root,
+        repo_full_name = excluded.repo_full_name,
+        default_branch = excluded.default_branch,
+        provider = excluded.provider
+    `).run(
+      repository.id,
+      repository.workspaceId,
+      repository.alias,
+      repository.name,
+      repository.repoRoot,
+      repository.repoFullName ?? null,
+      repository.defaultBranch ?? null,
+      repository.provider ?? null,
+    );
+    return repository;
+  }
+
+  listRepositories(workspaceId: string): Repository[] {
+    return (this.db.prepare("SELECT * FROM repositories WHERE workspace_id = ? ORDER BY alias").all(workspaceId) as RepositoryRow[])
+      .map(mapRepositoryRow);
+  }
+
+  getRepository(id: string): Repository | undefined {
+    const row = this.db.prepare("SELECT * FROM repositories WHERE id = ?").get(id) as RepositoryRow | undefined;
+    return row ? mapRepositoryRow(row) : undefined;
+  }
+
+  upsertWorkItem(workItem: WorkItem): WorkItem {
+    const timestamp = now();
+    this.db.prepare(`
+      INSERT INTO work_items (
+        id, project_id, workspace_id, repository_id, kind, external_id, title, state, labels_json, url, description, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        workspace_id = excluded.workspace_id,
+        repository_id = excluded.repository_id,
         title = excluded.title,
         state = excluded.state,
         labels_json = excluded.labels_json,
-        url = excluded.url
+        url = excluded.url,
+        description = excluded.description,
+        updated_at = excluded.updated_at
     `).run(
       workItem.id,
       workItem.projectId,
+      workItem.workspaceId,
+      workItem.repositoryId ?? null,
       workItem.kind,
       workItem.externalId,
       workItem.title,
       workItem.state,
       JSON.stringify(workItem.labels),
-      workItem.url,
+      workItem.url ?? null,
+      workItem.description ?? null,
+      workItem.createdAt ?? timestamp,
+      workItem.updatedAt ?? timestamp,
     );
     return workItem;
   }
@@ -456,45 +770,127 @@ export class CanonicalStore {
     return (this.db.prepare("SELECT * FROM work_items WHERE project_id = ? ORDER BY external_id DESC").all(projectId) as WorkItemRow[]).map(mapWorkItemRow);
   }
 
+  listWorkspaceWorkItems(workspaceId: string): WorkItem[] {
+    return (this.db.prepare("SELECT * FROM work_items WHERE workspace_id = ? ORDER BY updated_at DESC, external_id DESC").all(workspaceId) as WorkItemRow[])
+      .map(mapWorkItemRow);
+  }
+
   getWorkItem(id: string): WorkItem | undefined {
     const row = this.db.prepare("SELECT * FROM work_items WHERE id = ?").get(id) as WorkItemRow | undefined;
     return row ? mapWorkItemRow(row) : undefined;
   }
 
+  createLocalTask(input: {
+    workspaceId: string;
+    repositoryId?: string;
+    title: string;
+    description?: string;
+    labels?: string[];
+  }): WorkItem {
+    const nextId = randomUUID();
+    const externalId = `local-${nextId.slice(0, 8)}`;
+    return this.upsertWorkItem({
+      id: nextId,
+      workspaceId: input.workspaceId,
+      projectId: input.workspaceId,
+      repositoryId: input.repositoryId,
+      kind: "local-task",
+      externalId,
+      title: input.title,
+      state: "draft",
+      labels: input.labels ?? [],
+      url: localTaskUrl(input.workspaceId, externalId),
+      description: input.description,
+      createdAt: now(),
+      updatedAt: now(),
+    });
+  }
+
+  upsertReviewable(reviewable: Reviewable): Reviewable {
+    this.db.prepare(`
+      INSERT INTO reviewables (id, workspace_id, repository_id, provider, type, external_id, title, url, state, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        workspace_id = excluded.workspace_id,
+        repository_id = excluded.repository_id,
+        provider = excluded.provider,
+        type = excluded.type,
+        external_id = excluded.external_id,
+        title = excluded.title,
+        url = excluded.url,
+        state = excluded.state,
+        updated_at = excluded.updated_at
+    `).run(
+      reviewable.id,
+      reviewable.workspaceId,
+      reviewable.repositoryId,
+      reviewable.provider,
+      reviewable.type,
+      reviewable.externalId,
+      reviewable.title,
+      reviewable.url,
+      reviewable.state ?? null,
+      reviewable.createdAt,
+      reviewable.updatedAt,
+    );
+    return reviewable;
+  }
+
+  listReviewables(workspaceId: string): Reviewable[] {
+    return (this.db.prepare("SELECT * FROM reviewables WHERE workspace_id = ? ORDER BY updated_at DESC").all(workspaceId) as ReviewableRow[])
+      .map(mapReviewableRow);
+  }
+
+  getReviewable(id: string): Reviewable | undefined {
+    const row = this.db.prepare("SELECT * FROM reviewables WHERE id = ?").get(id) as ReviewableRow | undefined;
+    return row ? mapReviewableRow(row) : undefined;
+  }
+
   createWorkflowInstance(input: {
     projectId: string;
+    workspaceId?: string;
+    parentWorkItemId?: string;
     workItemId: string;
+    reviewableId?: string;
     stage: WorkflowInstance["stage"];
     status: WorkflowInstance["status"];
     branch: string;
     baseBranch: string;
     baseSha: string;
+    targetRepositoryIds?: string[];
     baselineSnapshot: WorkflowBaselineSnapshot;
   }): WorkflowInstance {
     const workflow: WorkflowInstance = {
       id: randomUUID(),
+      workspaceId: input.workspaceId ?? input.projectId,
       projectId: input.projectId,
+      parentWorkItemId: input.parentWorkItemId ?? input.workItemId,
       workItemId: input.workItemId,
+      reviewableId: input.reviewableId,
       stage: input.stage,
       status: input.status,
       repairRound: 0,
       branch: input.branch,
       baseBranch: input.baseBranch,
       baseSha: input.baseSha,
+      targetRepositoryIds: input.targetRepositoryIds,
       baselineSnapshot: input.baselineSnapshot,
       createdAt: now(),
       updatedAt: now(),
     };
     this.db.prepare(`
       INSERT INTO workflow_instances (
-        id, project_id, work_item_id, stage, status, status_reason, repair_round, pr_number, pr_url,
-        branch, base_branch, base_sha, baseline_snapshot_json, created_at, updated_at
+        id, project_id, workspace_id, parent_work_item_id, work_item_id, reviewable_id, stage, status, status_reason, repair_round, pr_number, pr_url,
+        branch, base_branch, base_sha, target_repository_ids_json, superseded_by_workflow_id, archived_at, baseline_snapshot_json, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       workflow.id,
       workflow.projectId,
+      workflow.workspaceId,
+      workflow.parentWorkItemId ?? null,
       workflow.workItemId,
+      workflow.reviewableId ?? null,
       workflow.stage,
       workflow.status,
       workflow.statusReason ?? null,
@@ -504,6 +900,9 @@ export class CanonicalStore {
       workflow.branch,
       workflow.baseBranch,
       workflow.baseSha,
+      workflow.targetRepositoryIds ? JSON.stringify(workflow.targetRepositoryIds) : null,
+      workflow.supersededByWorkflowId ?? null,
+      workflow.archivedAt ?? null,
       serializeBaselineSnapshot(workflow.baselineSnapshot),
       workflow.createdAt,
       workflow.updatedAt,
@@ -517,9 +916,13 @@ export class CanonicalStore {
     const next = { ...current, ...patch, updatedAt: now() };
     this.db.prepare(`
       UPDATE workflow_instances
-      SET stage = ?, status = ?, status_reason = ?, repair_round = ?, pr_number = ?, pr_url = ?, branch = ?, base_branch = ?, base_sha = ?, baseline_snapshot_json = ?, updated_at = ?
+      SET workspace_id = ?, parent_work_item_id = ?, work_item_id = ?, reviewable_id = ?, stage = ?, status = ?, status_reason = ?, repair_round = ?, pr_number = ?, pr_url = ?, branch = ?, base_branch = ?, base_sha = ?, target_repository_ids_json = ?, superseded_by_workflow_id = ?, archived_at = ?, baseline_snapshot_json = ?, updated_at = ?
       WHERE id = ?
     `).run(
+      next.workspaceId,
+      next.parentWorkItemId ?? null,
+      next.workItemId,
+      next.reviewableId ?? null,
       next.stage,
       next.status,
       next.statusReason ?? null,
@@ -529,6 +932,9 @@ export class CanonicalStore {
       next.branch,
       next.baseBranch,
       next.baseSha,
+      next.targetRepositoryIds ? JSON.stringify(next.targetRepositoryIds) : null,
+      next.supersededByWorkflowId ?? null,
+      next.archivedAt ?? null,
       serializeBaselineSnapshot(next.baselineSnapshot),
       next.updatedAt,
       id,
@@ -549,6 +955,39 @@ export class CanonicalStore {
 
   listWorkflowInstances(): WorkflowInstance[] {
     return (this.db.prepare("SELECT * FROM workflow_instances ORDER BY updated_at DESC").all() as WorkflowInstanceRow[]).map(mapWorkflowInstanceRow);
+  }
+
+  listWorkflowGroups(): WorkflowGroup[] {
+    const workflows = this.listWorkflowInstances().filter((workflow) => !workflow.archivedAt);
+    const groups = new Map<string, WorkflowInstance[]>();
+    for (const workflow of workflows) {
+      const key = workflow.reviewableId
+        ? `reviewable:${workflow.reviewableId}`
+        : `work-item:${workflow.parentWorkItemId ?? workflow.workItemId}`;
+      const existing = groups.get(key) ?? [];
+      existing.push(workflow);
+      groups.set(key, existing);
+    }
+
+    return [...groups.entries()].map(([key, grouped]) => {
+      const workflowsByRecency = [...grouped].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      const sample = workflowsByRecency[0]!;
+      return {
+        key,
+        workItemId: sample.parentWorkItemId ?? sample.workItemId,
+        reviewableId: sample.reviewableId,
+        latestWorkflow: workflowsByRecency[0]!,
+        workflows: workflowsByRecency,
+      };
+    });
+  }
+
+  archiveWorkflow(id: string): WorkflowInstance {
+    return this.updateWorkflowInstance(id, { archivedAt: now() });
+  }
+
+  supersedeWorkflow(id: string, supersededByWorkflowId: string): WorkflowInstance {
+    return this.updateWorkflowInstance(id, { supersededByWorkflowId });
   }
 
   createTask(input: {
@@ -598,6 +1037,7 @@ export class CanonicalStore {
     executorId: string;
     runnerId: string;
     workspacePath?: string;
+    eventLogPath?: string;
   }): ExecutionAttempt {
     const attempt: ExecutionAttempt = {
       id: randomUUID(),
@@ -607,15 +1047,30 @@ export class CanonicalStore {
       startedAt: now(),
       status: "running",
       workspacePath: input.workspacePath,
+      eventLogPath: input.eventLogPath,
     };
     this.db.prepare(`
-      INSERT INTO execution_attempts (id, task_id, executor_id, runner_id, started_at, status, workspace_path)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(attempt.id, attempt.taskId, attempt.executorId, attempt.runnerId, attempt.startedAt, attempt.status, attempt.workspacePath ?? null);
+      INSERT INTO execution_attempts (id, task_id, executor_id, runner_id, started_at, status, workspace_path, event_log_path)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(attempt.id, attempt.taskId, attempt.executorId, attempt.runnerId, attempt.startedAt, attempt.status, attempt.workspacePath ?? null, attempt.eventLogPath ?? null);
     return attempt;
   }
 
-  finishAttempt(id: string, result: { status: ExecutionAttempt["status"]; resultPath?: string; workspacePath?: string }): ExecutionAttempt {
+  updateAttemptMetadata(id: string, patch: { workspacePath?: string; eventLogPath?: string }): ExecutionAttempt {
+    const current = this.getAttempt(id);
+    if (!current) throw new Error(`Attempt ${id} not found`);
+    const next: ExecutionAttempt = {
+      ...current,
+      workspacePath: patch.workspacePath ?? current.workspacePath,
+      eventLogPath: patch.eventLogPath ?? current.eventLogPath,
+    };
+    this.db.prepare(`
+      UPDATE execution_attempts SET workspace_path = ?, event_log_path = ? WHERE id = ?
+    `).run(next.workspacePath ?? null, next.eventLogPath ?? null, id);
+    return next;
+  }
+
+  finishAttempt(id: string, result: { status: ExecutionAttempt["status"]; resultPath?: string; workspacePath?: string; eventLogPath?: string }): ExecutionAttempt {
     const current = this.getAttempt(id);
     if (!current) throw new Error(`Attempt ${id} not found`);
     const next: ExecutionAttempt = {
@@ -623,11 +1078,12 @@ export class CanonicalStore {
       status: result.status,
       resultPath: result.resultPath,
       workspacePath: result.workspacePath ?? current.workspacePath,
+      eventLogPath: result.eventLogPath ?? current.eventLogPath,
       finishedAt: now(),
     };
     this.db.prepare(`
-      UPDATE execution_attempts SET status = ?, result_path = ?, workspace_path = ?, finished_at = ? WHERE id = ?
-    `).run(next.status, next.resultPath ?? null, next.workspacePath ?? null, next.finishedAt, id);
+      UPDATE execution_attempts SET status = ?, result_path = ?, workspace_path = ?, event_log_path = ?, finished_at = ? WHERE id = ?
+    `).run(next.status, next.resultPath ?? null, next.workspacePath ?? null, next.eventLogPath ?? null, next.finishedAt, id);
     return next;
   }
 
@@ -713,7 +1169,10 @@ export class CanonicalStore {
   getWorkflowSnapshot(id: string): {
     workflow: WorkflowInstance;
     project: Project;
+    workspace: Workspace;
+    repositories: Repository[];
     workItem: WorkItem;
+    reviewable?: Reviewable;
     tasks: Task[];
     attempts: ExecutionAttempt[];
     events: PersistedTaskEvent[];
@@ -724,10 +1183,13 @@ export class CanonicalStore {
     const workflow = this.getWorkflowInstance(id);
     if (!workflow) throw new Error(`Workflow ${id} not found`);
     const project = this.getProject(workflow.projectId);
+    const workspace = this.getWorkspace(workflow.workspaceId);
     const workItem = this.getWorkItem(workflow.workItemId);
-    if (!project || !workItem) {
+    const reviewable = workflow.reviewableId ? this.getReviewable(workflow.reviewableId) : undefined;
+    if (!project || !workspace || !workItem) {
       throw new Error(`Workflow ${id} is missing related records`);
     }
+    const repositories = this.listRepositories(workspace.id);
     const tasks = this.listTasks(id);
     const attempts = tasks.flatMap((task) => this.listAttempts(task.id));
     const events = tasks.flatMap((task) => this.listEvents(task.id));
@@ -736,6 +1198,6 @@ export class CanonicalStore {
       .map((task) => this.getTaskResult(task.id))
       .filter((result): result is PersistedTaskResult => result !== undefined);
     const approvals = (this.db.prepare("SELECT * FROM approvals WHERE workflow_instance_id = ? ORDER BY rowid").all(id) as ApprovalRow[]).map(mapApprovalRow);
-    return { workflow, project, workItem, tasks, attempts, events, artifacts, results, approvals };
+    return { workflow, project, workspace, repositories, workItem, reviewable, tasks, attempts, events, artifacts, results, approvals };
   }
 }

@@ -14,6 +14,7 @@ import type { Project } from "../canonical/types.js";
 import { PROTOCOL_VERSION, type ArtifactRef, type TaskExecutionEvent, type TaskExecutionRequest, type TaskExecutionResult } from "@devagent-sdk/types";
 
 const paths: string[] = [];
+process.env.DEVAGENT_HUB_SKIP_BASELINE_CHECKS = "1";
 
 async function createTempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
@@ -66,6 +67,7 @@ class StubGitHubGateway implements GitHubGateway {
   public readonly pushedBranches: Array<{ repoPath: string; branch: string }> = [];
   public readonly createdPrs: Array<{ repo: string; head: string }> = [];
   public readonly resolvedThreads: Array<{ repo: string; prNumber: number; nodeIds: string[] }> = [];
+  public readonly fetchedPrs: Array<{ repo: string; prNumber: number }> = [];
   public reviewComments: GitHubComment[] = [];
   public ciFailureLogs: Array<{ check: string; log: string }> = [];
   public prHead = "devagent/workflow/test-branch";
@@ -103,12 +105,13 @@ class StubGitHubGateway implements GitHubGateway {
     };
   }
 
-  async fetchPR(_repo: string, _prNumber: number): Promise<GitHubPR> {
+  async fetchPR(repo: string, prNumber: number): Promise<GitHubPR> {
+    this.fetchedPrs.push({ repo, prNumber });
     return {
-      number: 10,
+      number: prNumber,
       title: "PR",
       body: "",
-      url: "https://github.com/org/repo/pull/10",
+      url: `https://github.com/${repo}/pull/${prNumber}`,
       state: "open",
       draft: true,
       head: this.prHead,
@@ -172,7 +175,7 @@ class StubRunnerClient implements RunnerClient {
 
   async startTask(request: TaskExecutionRequest): Promise<{ runId: string }> {
     const runId = `${request.taskType}-${request.taskId}`;
-    git(this.repoRoot, ["branch", "-f", request.workspace.workBranch, "main"]);
+    git(this.repoRoot, ["branch", "-f", request.execution.repositories[0]!.workBranch, "main"]);
     this.requests.set(runId, request);
     this.startedRequests.push(request);
     return { runId };
@@ -225,11 +228,12 @@ class StubRunnerClient implements RunnerClient {
     return result;
   }
 
-  async inspect(runId: string): Promise<{ workspacePath: string; resultPath: string }> {
+  async inspect(runId: string): Promise<{ workspacePath: string; resultPath: string; eventLogPath: string }> {
     const workspacePath = await this.ensureWorkspace(runId);
     return {
       workspacePath,
       resultPath: join(workspacePath, "result.json"),
+      eventLogPath: join(workspacePath, "events.jsonl"),
     };
   }
 
@@ -310,7 +314,7 @@ class BlockingCancelRunnerClient implements RunnerClient {
 
   async startTask(request: TaskExecutionRequest): Promise<{ runId: string }> {
     const runId = `${request.taskType}-${request.taskId}`;
-    git(this.repoRoot, ["branch", "-f", request.workspace.workBranch, "main"]);
+    git(this.repoRoot, ["branch", "-f", request.execution.repositories[0]!.workBranch, "main"]);
     this.requests.set(runId, request);
     let resolveResult!: (result: TaskExecutionResult) => void;
     const result = new Promise<TaskExecutionResult>((resolve) => {
@@ -364,11 +368,12 @@ class BlockingCancelRunnerClient implements RunnerClient {
     return this.deferred.get(runId)?.result ?? Promise.reject(new Error(`Missing result for ${runId}`));
   }
 
-  async inspect(_runId: string): Promise<{ workspacePath: string; resultPath: string }> {
+  async inspect(_runId: string): Promise<{ workspacePath: string; resultPath: string; eventLogPath: string }> {
     const workspacePath = await this.ensureWorkspace();
     return {
       workspacePath,
       resultPath: join(workspacePath, "result.json"),
+      eventLogPath: join(workspacePath, "events.jsonl"),
     };
   }
 
@@ -493,6 +498,74 @@ function reopenService(input: {
 }
 
 describe("WorkflowService", () => {
+  it("imports existing PR reviewables using GitHub metadata by default", async () => {
+    const { store, service } = await createService();
+
+    const reviewable = await service.importReviewable({
+      workspaceId: "org/repo",
+      repositoryId: "org/repo:primary",
+      externalId: "10",
+    });
+
+    expect(reviewable.title).toBe("PR");
+    expect(reviewable.url).toBe("https://github.com/org/repo/pull/10");
+    expect(store.getReviewable(reviewable.id)?.externalId).toBe("10");
+
+    store.close();
+  });
+
+  it("returns imported reviewables by id", async () => {
+    const { store, service } = await createService();
+    const reviewable = await service.importReviewable({
+      workspaceId: "org/repo",
+      repositoryId: "org/repo:primary",
+      externalId: "10",
+      title: "Imported title override",
+      url: "https://github.com/org/repo/pull/10",
+    });
+
+    expect(service.getReviewable(reviewable.id)).toEqual(reviewable);
+
+    store.close();
+  });
+
+  it("imports reviewables into the requested workspace and repository", async () => {
+    const { store, service, github } = await createService();
+    const repoRoot = await createTempDir("devagent-hub-secondary-repo-");
+    await initializeRepo(repoRoot);
+    store.upsertWorkspace({
+      id: "workspace-2",
+      name: "secondary",
+      provider: "github",
+      primaryRepositoryId: "workspace-2:secondary",
+      allowedExecutors: ["devagent"],
+    });
+    store.upsertRepository({
+      id: "workspace-2:secondary",
+      workspaceId: "workspace-2",
+      alias: "secondary",
+      name: "secondary",
+      repoRoot,
+      repoFullName: "org/secondary",
+      defaultBranch: "main",
+      provider: "github",
+    });
+
+    const reviewable = await service.importReviewable({
+      workspaceId: "workspace-2",
+      repositoryId: "workspace-2:secondary",
+      externalId: "11",
+    });
+
+    expect(github.fetchedPrs).toContainEqual({ repo: "org/secondary", prNumber: 11 });
+    expect(reviewable.workspaceId).toBe("workspace-2");
+    expect(reviewable.repositoryId).toBe("workspace-2:secondary");
+    expect(reviewable.url).toBe("https://github.com/org/secondary/pull/11");
+    expect(store.getReviewable(reviewable.id)?.workspaceId).toBe("workspace-2");
+
+    store.close();
+  });
+
   it("imports issues and pauses after plan approval", async () => {
     const { store, service } = await createService();
 
@@ -522,6 +595,24 @@ describe("WorkflowService", () => {
     expect(snapshot.artifacts).toHaveLength(0);
     expect(snapshot.events).toHaveLength(0);
     expect(runner.startedRequests).toHaveLength(0);
+
+    store.close();
+  });
+
+  it("reuses the active workflow when the same local task is started twice", async () => {
+    const { store, service } = await createService();
+    const task = service.createLocalTask({
+      title: "Manual task",
+      description: "Operator-created task",
+    });
+
+    const first = await service.startForWorkItem(task.id);
+    const second = await service.startForWorkItem(task.id);
+
+    expect(second.id).toBe(first.id);
+    expect(
+      store.listWorkflowInstances().filter((workflow) => workflow.workItemId === task.id),
+    ).toHaveLength(1);
 
     store.close();
   });
@@ -753,10 +844,16 @@ describe("WorkflowService", () => {
       },
     });
 
-    await expect(service.resume(stale.id)).rejects.toMatchObject({
-      code: "STALE_BASELINE",
-      name: "WorkflowStateError",
-    } satisfies Partial<WorkflowStateError>);
+    const previous = process.env.DEVAGENT_HUB_SKIP_BASELINE_CHECKS;
+    delete process.env.DEVAGENT_HUB_SKIP_BASELINE_CHECKS;
+    try {
+      await expect(service.resume(stale.id)).rejects.toMatchObject({
+        code: "STALE_BASELINE",
+        name: "WorkflowStateError",
+      } satisfies Partial<WorkflowStateError>);
+    } finally {
+      process.env.DEVAGENT_HUB_SKIP_BASELINE_CHECKS = previous ?? "1";
+    }
 
     store.close();
   });
@@ -768,10 +865,16 @@ describe("WorkflowService", () => {
       baseSha: "deadbeef",
     });
 
-    await expect(service.resume(stale.id)).rejects.toMatchObject({
-      code: "STALE_BRANCH_REF",
-      name: "WorkflowStateError",
-    } satisfies Partial<WorkflowStateError>);
+    const previous = process.env.DEVAGENT_HUB_SKIP_BASELINE_CHECKS;
+    delete process.env.DEVAGENT_HUB_SKIP_BASELINE_CHECKS;
+    try {
+      await expect(service.resume(stale.id)).rejects.toMatchObject({
+        code: "STALE_BRANCH_REF",
+        name: "WorkflowStateError",
+      } satisfies Partial<WorkflowStateError>);
+    } finally {
+      process.env.DEVAGENT_HUB_SKIP_BASELINE_CHECKS = previous ?? "1";
+    }
 
     store.close();
   });

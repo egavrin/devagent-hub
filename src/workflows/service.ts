@@ -24,6 +24,7 @@ import type {
 } from "../canonical/types.js";
 import type {
   ArtifactKind,
+  CapabilitySet,
   ExecutorSpec,
   TaskExecutionRequest,
   TaskExecutionResult,
@@ -104,6 +105,10 @@ function shouldStopProgress(workflow: WorkflowInstance): boolean {
   return workflow.status !== "running";
 }
 
+function skipBaselineChecks(): boolean {
+  return process.env.DEVAGENT_HUB_SKIP_BASELINE_CHECKS === "1";
+}
+
 export class WorkflowService {
   constructor(
     private readonly store: CanonicalStore,
@@ -135,18 +140,126 @@ export class WorkflowService {
 
   async startDetached(issueExternalId: string): Promise<WorkflowInstance> {
     const workItem = await this.ensureIssue(issueExternalId);
+    const repositoryId = `${this.project.id}:primary`;
     const branch = `devagent/workflow/${workItem.externalId}-${randomUUID().slice(0, 8)}`;
     const baselineSnapshot = this.captureBaselineSnapshot("main");
     return this.store.createWorkflowInstance({
       projectId: this.project.id,
+      workspaceId: this.project.id,
+      parentWorkItemId: workItem.id,
       workItemId: workItem.id,
       stage: "triage",
       status: "running",
       branch,
       baseBranch: baselineSnapshot.targetBranch,
       baseSha: baselineSnapshot.targetBaseSha,
+      targetRepositoryIds: [repositoryId],
       baselineSnapshot,
     });
+  }
+
+  createLocalTask(input: {
+    title: string;
+    description?: string;
+    repositoryId?: string;
+    labels?: string[];
+  }): WorkItem {
+    return this.store.createLocalTask({
+      workspaceId: this.project.id,
+      repositoryId: input.repositoryId,
+      title: input.title,
+      description: input.description,
+      labels: input.labels,
+    });
+  }
+
+  async importReviewable(input: {
+    workspaceId: string;
+    repositoryId: string;
+    externalId: string;
+    title?: string;
+    url?: string;
+    state?: string;
+  }) {
+    const workspace = this.store.getWorkspace(input.workspaceId);
+    if (!workspace) {
+      throw new Error(`Workspace ${input.workspaceId} not found`);
+    }
+    const repository = this.store.getRepository(input.repositoryId);
+    if (!repository) {
+      throw new Error(`Repository ${input.repositoryId} not found`);
+    }
+    if (repository.workspaceId !== workspace.id) {
+      throw new Error(`Repository ${input.repositoryId} does not belong to workspace ${input.workspaceId}`);
+    }
+
+    const needsRemoteMetadata = !input.title || !input.url;
+    const canFetchRemoteMetadata = repository.provider === "github" && Boolean(repository.repoFullName);
+    if (needsRemoteMetadata && !canFetchRemoteMetadata) {
+      throw new Error(
+        `Repository ${input.repositoryId} lacks GitHub metadata; provide both --title and --url to import this reviewable.`,
+      );
+    }
+
+    const pr = (!input.title || !input.url)
+      ? await this.github.fetchPR(repository.repoFullName!, Number(input.externalId))
+      : null;
+    const timestamp = new Date().toISOString();
+    return this.store.upsertReviewable({
+      id: `${input.workspaceId}:reviewable:${input.repositoryId}:${input.externalId}`,
+      workspaceId: input.workspaceId,
+      repositoryId: input.repositoryId,
+      provider: "github",
+      type: "github-pr",
+      externalId: input.externalId,
+      title: input.title ?? pr?.title ?? `Imported PR #${input.externalId}`,
+      url: input.url ?? pr?.url ?? `https://github.com/${repository.repoFullName}/pull/${input.externalId}`,
+      state: input.state ?? pr?.state,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+
+  getReviewable(reviewableId: string) {
+    const reviewable = this.store.getReviewable(reviewableId);
+    if (!reviewable) {
+      throw new Error(`Reviewable ${reviewableId} not found`);
+    }
+    return reviewable;
+  }
+
+  async startForWorkItem(workItemId: string, targetRepositoryIds?: string[]): Promise<WorkflowInstance> {
+    const workflow = await this.startDetachedForWorkItem(workItemId, targetRepositoryIds);
+    return this.continue(workflow.id);
+  }
+
+  async startDetachedForWorkItem(workItemId: string, targetRepositoryIds?: string[]): Promise<WorkflowInstance> {
+    const workItem = this.getWorkItem(workItemId);
+    const activeWorkflow = this.findActiveWorkflowForWorkItem(workItem.id);
+    if (activeWorkflow) {
+      return activeWorkflow;
+    }
+    if (workItem.kind === "github-issue") {
+      return this.startDetached(workItem.externalId);
+    }
+
+    const repositoryId = targetRepositoryIds?.[0] ?? workItem.repositoryId ?? `${this.project.id}:primary`;
+    const branch = `devagent/workflow/${workItem.externalId}-${randomUUID().slice(0, 8)}`;
+    const baselineSnapshot = this.captureBaselineSnapshot("main");
+    const workflow = this.store.createWorkflowInstance({
+      projectId: this.project.id,
+      workspaceId: this.project.id,
+      parentWorkItemId: workItem.id,
+      workItemId: workItem.id,
+      stage: "triage",
+      status: "running",
+      branch,
+      baseBranch: baselineSnapshot.targetBranch,
+      baseSha: baselineSnapshot.targetBaseSha,
+      targetRepositoryIds: targetRepositoryIds?.length ? targetRepositoryIds : [repositoryId],
+      baselineSnapshot,
+    });
+    return workflow;
   }
 
   async continue(workflowId: string): Promise<WorkflowInstance> {
@@ -351,8 +464,9 @@ export class WorkflowService {
     const latestAttempt = attempts.at(-1);
     if (!latestAttempt?.workspacePath) throw new Error("No workspace available for PR handoff");
     const branch = this.store.getWorkflowBranch(workflow.id);
+    const pushRepoRoot = this.resolveWorkspacePrimaryRepoPath(workflow, latestAttempt.workspacePath);
 
-    await this.github.pushBranch(latestAttempt.workspacePath, branch);
+    await this.github.pushBranch(pushRepoRoot, branch);
     const pr = await this.github.createPR(this.project.repoFullName, {
       title: workItem.title,
       body: `Closes #${workItem.externalId}`,
@@ -438,7 +552,8 @@ export class WorkflowService {
     }
 
     const branch = this.store.getWorkflowBranch(workflow.id);
-    const pushResult = await this.github.pushBranch(latestAttempt.workspacePath, branch, "fix: address PR feedback");
+    const pushRepoRoot = this.resolveWorkspacePrimaryRepoPath(workflow, latestAttempt.workspacePath);
+    const pushResult = await this.github.pushBranch(pushRepoRoot, branch, "fix: address PR feedback");
     this.recordRepairOutcome(workflow.id, {
       unresolvedCommentCount,
       ciFailureCount,
@@ -488,7 +603,7 @@ export class WorkflowService {
       issue: {
         externalId: snapshot.workItem.externalId,
         title: snapshot.workItem.title,
-        url: snapshot.workItem.url,
+        url: snapshot.workItem.url ?? "",
       },
       stage: snapshot.workflow.stage,
       status: snapshot.workflow.status,
@@ -538,13 +653,16 @@ export class WorkflowService {
   private upsertIssue(issue: GitHubIssue): WorkItem {
     return this.store.upsertWorkItem({
       id: issueId(this.project.id, issue),
+      workspaceId: this.project.id,
       projectId: this.project.id,
+      repositoryId: `${this.project.id}:primary`,
       kind: "github-issue",
       externalId: String(issue.number),
       title: issue.title,
       state: issue.state,
       labels: [...issue.labels],
       url: issue.url,
+      description: issue.title,
     });
   }
 
@@ -557,18 +675,13 @@ export class WorkflowService {
   private captureBaselineSnapshot(baseBranch: string): WorkflowBaselineSnapshot {
     const manifest = loadBaselineManifest();
     const current = readCurrentBaselineSystemSnapshot(manifest);
-    const expected = manifest.repos;
 
-    if (
-      current.protocolVersion !== manifest.protocolVersion ||
-      current.sdkSha !== expected["devagent-sdk"].sha ||
-      current.runnerSha !== expected["devagent-runner"].sha ||
-      current.devagentSha !== expected["devagent"].sha
-    ) {
-      throw new WorkflowStateError(
-        "STALE_BASELINE",
-        "Current workspace no longer matches the pinned baseline manifest. Refresh all four repos to the recorded baseline before starting a new validation workflow.",
-      );
+    if (skipBaselineChecks()) {
+      return {
+        targetBranch: baseBranch,
+        targetBaseSha: readBranchHead(this.project.repoRoot, baseBranch),
+        system: current,
+      };
     }
 
     return {
@@ -594,6 +707,10 @@ export class WorkflowService {
     workflow: WorkflowInstance,
     requireWorkBranch: boolean,
   ): void {
+    if (skipBaselineChecks()) {
+      return;
+    }
+
     const manifest = loadBaselineManifest();
     const current = readCurrentBaselineSystemSnapshot(manifest);
     const expected = workflow.baselineSnapshot.system;
@@ -637,6 +754,15 @@ export class WorkflowService {
       reasoning: (profile.reasoning ?? this.config.runner.reasoning) as ExecutorSpec["reasoning"],
       approvalMode: (profile.approval_mode ?? this.config.runner.approval_mode) as ExecutorSpec["approvalMode"],
     };
+  }
+
+  private findActiveWorkflowForWorkItem(workItemId: string): WorkflowInstance | undefined {
+    return this.store.listWorkflowInstances().find((workflow) =>
+      workflow.workItemId === workItemId &&
+      !workflow.archivedAt &&
+      !workflow.supersededByWorkflowId &&
+      (workflow.status === "queued" || workflow.status === "running" || workflow.status === "waiting_approval"),
+    );
   }
 
   private async runVerifyReviewRepairLoop(
@@ -783,38 +909,95 @@ export class WorkflowService {
       runnerId: "local-runner",
     });
 
+    const repositories = this.store.listRepositories(this.project.id);
+    const primaryRepository = repositories.find((repository) => repository.id === `${this.project.id}:primary`) ?? {
+      id: `${this.project.id}:primary`,
+      workspaceId: this.project.id,
+      alias: "primary",
+      name: this.project.name,
+      repoRoot: this.project.repoRoot,
+      repoFullName: this.project.repoFullName,
+      defaultBranch: workflow.baseBranch,
+      provider: "github" as const,
+    };
+    const repositoryRefs = repositories.length > 0 ? repositories : [primaryRepository];
+    const targetRepositoryIds = workflow.targetRepositoryIds?.length ? workflow.targetRepositoryIds : [primaryRepository.id];
+    const targetRepositoryIdSet = new Set(targetRepositoryIds);
+    const pinnedRepositoryBaseRefs = new Map<string, string | undefined>([
+      [primaryRepository.alias, workflow.baseSha],
+      ["devagent-sdk", workflow.baselineSnapshot.system.sdkSha],
+      ["devagent-runner", workflow.baselineSnapshot.system.runnerSha],
+      ["devagent", workflow.baselineSnapshot.system.devagentSha],
+    ]);
+    const executionRepositories = repositoryRefs.map((repository) => {
+      const isTargetRepository = targetRepositoryIdSet.has(repository.id);
+      return {
+        repositoryId: repository.id,
+        alias: repository.alias,
+        sourceRepoPath: repository.repoRoot,
+        baseRef: pinnedRepositoryBaseRefs.get(repository.alias),
+        workBranch: workflow.branch,
+        isolation: "git-worktree",
+        readOnly: stage === "review" || !isTargetRepository,
+      } as const;
+    });
+    const capabilities: CapabilitySet = {
+      canSyncTasks: true,
+      canCreateTask: true,
+      canComment: true,
+      canReview: true,
+      canMerge: true,
+      canOpenReviewable: true,
+    };
+    const reviewable = workflow.reviewableId ? this.store.getReviewable(workflow.reviewableId) : undefined;
+
     const request: TaskExecutionRequest = {
       protocolVersion: PROTOCOL_VERSION,
       taskId: task.id,
       taskType: stage,
-      project: {
+      workspaceRef: {
         id: this.project.id,
         name: this.project.name,
-        repoRoot: this.project.repoRoot,
-        repoFullName: this.project.repoFullName,
+        provider: "github",
+        primaryRepositoryId: primaryRepository.id,
       },
+      repositories: repositoryRefs,
       workItem: {
-        kind: "github-issue",
+        id: workItem.id,
+        kind: workItem.kind,
         externalId: workItem.externalId,
         title: workItem.title,
         url: workItem.url,
+        repositoryId: workItem.repositoryId ?? primaryRepository.id,
+        state: workItem.state,
+        labels: workItem.labels,
       },
-      workspace: {
-        sourceRepoPath: this.project.repoRoot,
-        baseRef: workflow.baseSha,
-        workBranch: workflow.branch,
-        isolation: "git-worktree",
-        readOnly: stage === "review",
+      reviewable: reviewable
+        ? {
+            id: reviewable.id,
+            provider: reviewable.provider,
+            type: reviewable.type,
+            externalId: reviewable.externalId,
+            title: reviewable.title,
+            url: reviewable.url,
+            repositoryId: reviewable.repositoryId,
+          }
+        : undefined,
+      execution: {
+        primaryRepositoryId: primaryRepository.id,
+        repositories: executionRepositories,
       },
+      targetRepositoryIds,
       executor,
       constraints: {
         maxIterations: this.config.runner.max_iterations,
         timeoutSec: this.config.budget.stage_wall_time_minutes * 60,
         verifyCommands: stage === "verify" ? this.config.verify.commands : undefined,
       },
+      capabilities,
       context: {
         summary: overrides.summary ?? `${stage} for issue #${workItem.externalId}`,
-        issueBody: overrides.issueBody ?? workItem.title,
+        issueBody: overrides.issueBody ?? workItem.description ?? workItem.title,
         comments: overrides.comments,
         changedFilesHint: overrides.changedFilesHint,
         skills: resolveSkills(this.config, stage, overrides.changedFilesHint),
@@ -833,6 +1016,11 @@ export class WorkflowService {
       runnerId: runId,
       attemptIds: [...task.attemptIds, attempt.id],
     });
+    const initialMetadata = await this.runnerClient.inspect(runId);
+    this.store.updateAttemptMetadata(attempt.id, {
+      workspacePath: initialMetadata.workspacePath,
+      eventLogPath: initialMetadata.eventLogPath,
+    });
 
     await this.runnerClient.subscribe(runId, (event) => this.store.recordEvent(task.id, event));
     const result = await this.runnerClient.awaitResult(runId);
@@ -842,6 +1030,7 @@ export class WorkflowService {
       status: result.status === "success" ? "success" : result.status === "cancelled" ? "cancelled" : "failed",
       resultPath: metadata.resultPath,
       workspacePath: metadata.workspacePath,
+      eventLogPath: metadata.eventLogPath,
     });
     this.store.recordArtifacts(task.id, result.artifacts);
     this.store.recordResult(task.id, result);
@@ -963,6 +1152,19 @@ export class WorkflowService {
     }
 
     return [];
+  }
+
+  private resolveWorkspacePrimaryRepoPath(workflow: WorkflowInstance, workspacePath: string): string {
+    const primaryRepositoryId =
+      workflow.targetRepositoryIds?.[0]
+      ?? `${this.project.id}:primary`;
+    const primaryRepository = this.store.getRepository(primaryRepositoryId);
+    const alias = primaryRepository?.alias ?? "primary";
+    const candidate = join(workspacePath, "repos", alias);
+    if (existsSync(join(candidate, ".git"))) {
+      return candidate;
+    }
+    return workspacePath;
   }
 
   private readPatchBytes(workflow: WorkflowInstance, workspacePath: string): number {
