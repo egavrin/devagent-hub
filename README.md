@@ -108,16 +108,16 @@ A docs-only issue follows the same canonical Hub path as any other issue:
 
 `issue -> triage -> plan -> approval -> implement -> verify -> review -> PR handoff`
 
-For a smoke run such as a README-only change, the operator flow stays the same:
+For a smoke run such as a README-only change, the operator flow still requires both approval gates:
 
 1. start the workflow for the issue
 2. inspect `status` and review the generated `plan.md`
-3. approve with `devagent-hub run resume <workflow-id>`
+3. approve the plan with `devagent-hub run resume <workflow-id>`
 4. let Hub run `implement -> verify -> review`
 5. inspect the final `status` output and artifacts
-6. hand off with `devagent-hub pr open <workflow-id>`
+6. approve final handoff with `devagent-hub pr open <workflow-id>`
 
-Docs-only does not bypass approvals, verification, review, stale-state checks, or review-size gates.
+Docs-only does not bypass plan approval, final review approval, verification, review, stale-state checks, or review-size gates.
 Use the same `run reject` path if the plan or final handoff needs another pass.
 
 ## Review The Plan

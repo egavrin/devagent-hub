@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { PROTOCOL_VERSION, type ArtifactRef, type TaskExecutionEvent, type TaskExecutionRequest, type TaskExecutionResult } from "@devagent-sdk/types";
 import { CanonicalStore } from "../persistence/canonical-store.js";
 import { defaultConfig } from "../workflow/config.js";
 import { WorkflowService } from "../workflows/service.js";
@@ -11,7 +12,32 @@ import type { GitHubGateway, PushBranchResult } from "../github/gateway.js";
 import type { GitHubCheck, GitHubComment, GitHubIssue, GitHubPR } from "../github/types.js";
 import type { RunnerClient } from "../runner-client/types.js";
 import type { Project } from "../canonical/types.js";
-import { PROTOCOL_VERSION, type ArtifactRef, type TaskExecutionEvent, type TaskExecutionRequest, type TaskExecutionResult } from "@devagent-sdk/types";
+
+const baselineSnapshot = {
+  protocolVersion: PROTOCOL_VERSION,
+  sdkSha: "sdk-sha",
+  runnerSha: "runner-sha",
+  devagentSha: "devagent-sha",
+  hubSha: "hub-sha",
+};
+
+vi.mock("../baseline/manifest.js", async () => {
+  const actual = await vi.importActual<typeof import("../baseline/manifest.js")>("../baseline/manifest.js");
+  return {
+    ...actual,
+    loadBaselineManifest: () => ({
+      protocolVersion: PROTOCOL_VERSION,
+      repos: {
+        "devagent-sdk": { sha: baselineSnapshot.sdkSha },
+        "devagent-runner": { sha: baselineSnapshot.runnerSha },
+        "devagent": { sha: baselineSnapshot.devagentSha },
+        "devagent-hub": { sha: baselineSnapshot.hubSha },
+      },
+    }),
+    readCurrentBaselineSystemSnapshot: () => ({ ...baselineSnapshot }),
+    readBranchHead: () => "main-sha",
+  };
+});
 
 const paths: string[] = [];
 
