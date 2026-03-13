@@ -156,7 +156,7 @@ export class CapturingRunnerClient implements RunnerClient {
   constructor(private readonly repoRoot: string) {}
 
   async startTask(request: TaskExecutionRequest): Promise<{ runId: string }> {
-    git(this.repoRoot, ["branch", "-f", request.workspace.workBranch, "main"]);
+    git(this.repoRoot, ["branch", "-f", request.execution.repositories[0]!.workBranch, "main"]);
     const runId = `${request.taskType}-${request.taskId}`;
     this.requests.set(runId, request);
     this.startedRequests.push(request);
@@ -209,11 +209,12 @@ export class CapturingRunnerClient implements RunnerClient {
     return result;
   }
 
-  async inspect(runId: string): Promise<{ workspacePath: string; resultPath: string }> {
+  async inspect(runId: string): Promise<{ workspacePath: string; resultPath: string; eventLogPath: string }> {
     const workspacePath = join(this.repoRoot, ".baseline-artifacts", runId);
     return {
       workspacePath,
       resultPath: join(workspacePath, "result.json"),
+      eventLogPath: join(workspacePath, "events.jsonl"),
     };
   }
 

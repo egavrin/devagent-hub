@@ -89,6 +89,8 @@ describe("loadWorkflowConfig", () => {
   }
 
   afterEach(() => {
+    delete process.env.DEVAGENT_HUB_FALLBACK_PROVIDER;
+    delete process.env.DEVAGENT_HUB_FALLBACK_MODEL;
     if (tmpDir) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -98,6 +100,17 @@ describe("loadWorkflowConfig", () => {
     const dir = makeTmpDir();
     const cfg = loadWorkflowConfig(dir);
     expect(cfg).toEqual(defaultConfig());
+  });
+
+  it("uses fallback provider and model from env when WORKFLOW.md is missing", () => {
+    const dir = makeTmpDir();
+    process.env.DEVAGENT_HUB_FALLBACK_PROVIDER = "chatgpt";
+    process.env.DEVAGENT_HUB_FALLBACK_MODEL = "gpt-5.4";
+
+    const cfg = loadWorkflowConfig(dir);
+
+    expect(cfg.runner.provider).toBe("chatgpt");
+    expect(cfg.runner.model).toBe("gpt-5.4");
   });
 
   it("reads and parses WORKFLOW.md from repo root", () => {
@@ -119,6 +132,27 @@ pr:
     expect(cfg.pr.open_requires).toEqual(["verify", "review"]);
     // defaults preserved
     expect(cfg.runner).toEqual(defaultConfig().runner);
+  });
+
+  it("ignores fallback env when WORKFLOW.md is present", () => {
+    const dir = makeTmpDir();
+    process.env.DEVAGENT_HUB_FALLBACK_PROVIDER = "chatgpt";
+    process.env.DEVAGENT_HUB_FALLBACK_MODEL = "gpt-5.4";
+    writeFileSync(
+      join(dir, "WORKFLOW.md"),
+      `---
+runner:
+  provider: anthropic
+  model: claude-sonnet-4.5
+---
+# Workflow
+`,
+    );
+
+    const cfg = loadWorkflowConfig(dir);
+
+    expect(cfg.runner.provider).toBe("anthropic");
+    expect(cfg.runner.model).toBe("claude-sonnet-4.5");
   });
 
   it("throws on invalid approval_mode in WORKFLOW.md", () => {

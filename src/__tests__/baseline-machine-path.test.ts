@@ -61,23 +61,42 @@ async function loadRequest(taskType: TaskType): Promise<TaskExecutionRequest> {
 }
 
 function normalizeRequest(taskType: TaskType, request: TaskExecutionRequest): TaskExecutionRequest {
+  const repositoryId = request.repositories[0]?.id ?? "repo-1";
   return {
     ...request,
     protocolVersion: PROTOCOL_VERSION,
     taskId: uniqueTaskId(`baseline-${taskType}`),
-    project: {
+    workspaceRef: {
       id: "egavrin/devagent-hub",
       name: "devagent-hub",
+      provider: "github",
+      primaryRepositoryId: repositoryId,
+    },
+    repositories: [{
+      ...(request.repositories[0] ?? {
+        id: repositoryId,
+        workspaceId: "egavrin/devagent-hub",
+        alias: "primary",
+        name: "devagent-hub",
+        provider: "github" as const,
+      }),
       repoRoot: hubRoot,
       repoFullName: "egavrin/devagent-hub",
+      defaultBranch: "main",
+    }],
+    execution: {
+      primaryRepositoryId: repositoryId,
+      repositories: [{
+        repositoryId,
+        alias: request.execution.repositories[0]?.alias ?? "primary",
+        sourceRepoPath: hubRoot,
+        baseRef: "main",
+        workBranch: `baseline/${taskType}/${uniqueTaskId(taskType)}`,
+        isolation: taskType === "verify" ? "temp-copy" : "git-worktree",
+        readOnly: taskType === "review" || taskType === "verify",
+      }],
     },
-    workspace: {
-      sourceRepoPath: hubRoot,
-      baseRef: "main",
-      workBranch: `baseline/${taskType}/${uniqueTaskId(taskType)}`,
-      isolation: taskType === "verify" ? "temp-copy" : "git-worktree",
-      readOnly: taskType === "review" || taskType === "verify",
-    },
+    targetRepositoryIds: [repositoryId],
     executor: {
       executorId: "devagent",
       profileName: "baseline",

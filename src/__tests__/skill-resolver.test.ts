@@ -10,11 +10,11 @@ afterEach(async () => {
 });
 
 describe("resolveSkills", () => {
-  it("returns configured stage skills even when local skill files are not present", () => {
+  it("does not inject default stage skills when none are configured", () => {
     const config = defaultConfig();
     const resolved = resolveSkills(config, "implement", ["src/index.ts"]);
 
-    expect(resolved).toEqual(["testing"]);
+    expect(resolved).toEqual([]);
   });
 
   it("adds path-override skills when changed files match", () => {

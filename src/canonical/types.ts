@@ -2,6 +2,7 @@ import type {
   TaskExecutionEvent,
   TaskExecutionResult,
   WorkflowTaskType,
+  WorkspaceProvider,
 } from "@devagent-sdk/types";
 
 export type RepairOutcome = {
@@ -38,21 +39,63 @@ export type Project = {
   allowedExecutors: string[];
 };
 
+export type Workspace = {
+  id: string;
+  name: string;
+  provider: WorkspaceProvider;
+  primaryRepositoryId?: string;
+  workflowConfigPath?: string;
+  allowedExecutors: string[];
+};
+
+export type Repository = {
+  id: string;
+  workspaceId: string;
+  alias: string;
+  name: string;
+  repoRoot: string;
+  repoFullName?: string;
+  defaultBranch?: string;
+  provider?: WorkspaceProvider;
+};
+
 export type WorkItem = {
   id: string;
+  workspaceId: string;
   projectId: string;
-  kind: "github-issue";
+  repositoryId?: string;
+  kind: "github-issue" | "local-task";
   externalId: string;
   title: string;
-  state: "open" | "closed";
+  state: "open" | "closed" | "draft";
   labels: string[];
+  url?: string;
+  description?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type Reviewable = {
+  id: string;
+  workspaceId: string;
+  repositoryId: string;
+  provider: "github";
+  type: "github-pr";
+  externalId: string;
+  title: string;
   url: string;
+  state?: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type WorkflowInstance = {
   id: string;
+  workspaceId: string;
   projectId: string;
+  parentWorkItemId?: string;
   workItemId: string;
+  reviewableId?: string;
   stage: WorkflowTaskType | "done";
   status: "queued" | "running" | "waiting_approval" | "failed" | "completed" | "cancelled";
   statusReason?: string;
@@ -62,9 +105,20 @@ export type WorkflowInstance = {
   branch: string;
   baseBranch: string;
   baseSha: string;
+  targetRepositoryIds?: string[];
+  supersededByWorkflowId?: string;
+  archivedAt?: string;
   baselineSnapshot: WorkflowBaselineSnapshot;
   createdAt: string;
   updatedAt: string;
+};
+
+export type WorkflowGroup = {
+  key: string;
+  workItemId?: string;
+  reviewableId?: string;
+  latestWorkflow: WorkflowInstance;
+  workflows: WorkflowInstance[];
 };
 
 export type Task = {
@@ -87,6 +141,7 @@ export type ExecutionAttempt = {
   status: "running" | "success" | "failed" | "cancelled";
   resultPath?: string;
   workspacePath?: string;
+  eventLogPath?: string;
 };
 
 export type Approval = {

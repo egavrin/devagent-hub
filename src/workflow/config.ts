@@ -120,8 +120,20 @@ export function defaultConfig(): WorkflowConfig {
     tracker: { kind: "github", issue_labels_include: ["devagent"] },
     dispatch: { max_concurrency: 4 },
     workspace: { mode: "worktree", root: "." },
-    runner: { approval_mode: "full-auto", max_iterations: 10 },
-    profiles: { default: {} },
+    runner: {
+      bin: "devagent",
+      provider: "chatgpt",
+      model: "gpt-5.4",
+      approval_mode: "full-auto",
+      max_iterations: 10,
+    },
+    profiles: {
+      default: {
+        bin: "devagent",
+        provider: "chatgpt",
+        model: "gpt-5.4",
+      },
+    },
     roles: {
       triage: "default",
       plan: "default",
@@ -132,15 +144,8 @@ export function defaultConfig(): WorkflowConfig {
     },
     skills: {
       defaults: [],
-      by_stage: {
-        implement: ["testing"],
-        review: ["security-checklist"],
-      },
-      path_overrides: {
-        "src/runner-client/**": ["runner-integration"],
-        "src/workflow/**": ["state-machine"],
-        "src/__tests__/**": ["testing"],
-      },
+      by_stage: {},
+      path_overrides: {},
     },
     verify: { commands: ["bun run test", "bun run typecheck"] },
     review: {
@@ -300,6 +305,23 @@ function extractFrontmatter(content: string): string | null {
   return match ? match[1] : null;
 }
 
+function fallbackConfigFromEnv(): Partial<WorkflowConfig> {
+  const provider = process.env.DEVAGENT_HUB_FALLBACK_PROVIDER?.trim();
+  const model = process.env.DEVAGENT_HUB_FALLBACK_MODEL?.trim();
+
+  if (!provider && !model) {
+    return {};
+  }
+
+  return {
+    runner: {
+      ...defaultConfig().runner,
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
+    },
+  };
+}
+
 /**
  * Parse YAML frontmatter from a WORKFLOW.md content string and return a
  * fully-populated WorkflowConfig (parsed values overlaid on defaults).
@@ -325,7 +347,10 @@ export function loadWorkflowConfig(repoRoot: string): WorkflowConfig {
   const filePath = join(repoRoot, "WORKFLOW.md");
   let config: WorkflowConfig;
   if (!existsSync(filePath)) {
-    config = defaultConfig();
+    config = deepMerge(
+      defaultConfig() as unknown as Record<string, unknown>,
+      fallbackConfigFromEnv() as Record<string, unknown>,
+    ) as unknown as WorkflowConfig;
   } else {
     const content = readFileSync(filePath, "utf-8");
     config = parseWorkflowConfig(content);

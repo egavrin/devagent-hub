@@ -41,23 +41,60 @@ function createRequest(
   taskId: string,
   profileName?: string,
 ): TaskExecutionRequest {
+  const workspaceId = "workspace-1";
+  const repositoryId = "repo-1";
   return {
     protocolVersion: PROTOCOL_VERSION,
     taskId,
     taskType: "triage",
-    project: { id: "p1", name: "repo", repoRoot },
-    workItem: { kind: "github-issue", externalId: "1", title: "Runner client" },
-    workspace: {
-      sourceRepoPath: repoRoot,
-      workBranch: `devagent/workflow/${taskId}`,
-      isolation: "temp-copy",
+    workspaceRef: {
+      id: workspaceId,
+      name: "Runner Client Workspace",
+      provider: "github",
+      primaryRepositoryId: repositoryId,
     },
+    repositories: [{
+      id: repositoryId,
+      workspaceId,
+      alias: "primary",
+      name: "repo",
+      repoRoot,
+      repoFullName: "org/repo",
+      defaultBranch: "main",
+      provider: "github",
+    }],
+    workItem: {
+      id: "issue-1",
+      kind: "github-issue",
+      externalId: "1",
+      title: "Runner client",
+      repositoryId,
+    },
+    execution: {
+      primaryRepositoryId: repositoryId,
+      repositories: [{
+        repositoryId,
+        alias: "primary",
+        sourceRepoPath: repoRoot,
+        workBranch: `devagent/workflow/${taskId}`,
+        isolation: "temp-copy",
+      }],
+    },
+    targetRepositoryIds: [repositoryId],
     executor: {
       executorId: "codex",
       profileName,
       model: "test-model",
     },
     constraints: {},
+    capabilities: {
+      canSyncTasks: true,
+      canCreateTask: true,
+      canComment: true,
+      canReview: true,
+      canMerge: true,
+      canOpenReviewable: true,
+    },
     context: {
       summary: "runner client test",
     },

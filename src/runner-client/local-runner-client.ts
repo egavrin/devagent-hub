@@ -59,8 +59,8 @@ export class LocalRunnerClient implements RunnerClient {
     return this.runner.awaitResult(runId);
   }
 
-  inspect(runId: string): Promise<{ workspacePath: string; resultPath: string }> {
-    return this.runner.inspect(runId) as Promise<{ workspacePath: string; resultPath: string }>;
+  inspect(runId: string): Promise<{ workspacePath: string; resultPath: string; eventLogPath: string }> {
+    return this.runner.inspect(runId) as Promise<{ workspacePath: string; resultPath: string; eventLogPath: string }>;
   }
 
   cleanupRun(runId: string): Promise<void> {
