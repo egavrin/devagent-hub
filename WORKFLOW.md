@@ -128,6 +128,14 @@ bun run check:oss
 
 ## Human Review Loops
 
+A docs-only issue-to-PR smoke run still uses the same staged machine path:
+
+`issue -> triage -> plan -> approval -> implement -> verify -> review -> PR handoff`
+
+For operator handling, docs-only work keeps the standard checkpoints: review `status`, approve with
+`run resume`, request another pass with `run reject`, and open the PR only after the final pause at
+`pr open`.
+
 Hub exposes these operator actions on top of the staged workflow:
 
 - `devagent-hub run resume <workflow-id>`
