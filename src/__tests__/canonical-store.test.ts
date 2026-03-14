@@ -74,6 +74,12 @@ describe("CanonicalStore", () => {
       executorId: "devagent",
       runnerId: "run-1",
       workspacePath: "/tmp/workspace",
+      session: {
+        kind: "devagent-headless-v1",
+        payload: {
+          messages: [],
+        },
+      },
     });
     const event: TaskExecutionEvent = {
       protocolVersion: PROTOCOL_VERSION,
@@ -118,6 +124,7 @@ describe("CanonicalStore", () => {
     expect(snapshot.workItem.id).toBe(workItem.id);
     expect(snapshot.tasks).toHaveLength(1);
     expect(snapshot.attempts).toHaveLength(1);
+    expect(snapshot.attempts[0]?.session?.kind).toBe("devagent-headless-v1");
     expect(snapshot.events).toHaveLength(1);
     expect(snapshot.artifacts).toHaveLength(1);
     expect(snapshot.results).toHaveLength(1);

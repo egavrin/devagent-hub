@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import {
   parseWorkflowConfig,
   loadWorkflowConfig,
+  resolveWorkflowConfig,
   defaultConfig,
   validateConfig,
   WorkflowConfigError,
@@ -96,14 +97,36 @@ describe("loadWorkflowConfig", () => {
     }
   });
 
-  it("returns defaults when file does not exist", () => {
+  it("infers npm-based verify commands when WORKFLOW.md is missing", () => {
     const dir = makeTmpDir();
-    const cfg = loadWorkflowConfig(dir);
-    expect(cfg).toEqual(defaultConfig());
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        scripts: {
+          test: "vitest run",
+          typecheck: "tsc --noEmit",
+        },
+      }),
+    );
+
+    const resolved = resolveWorkflowConfig(dir);
+
+    expect(resolved.source).toBe("inferred-node");
+    expect(resolved.detectedProjectKind).toBe("node");
+    expect(resolved.config.verify.commands).toEqual(["npm run test", "npm run typecheck"]);
   });
 
   it("uses fallback provider and model from env when WORKFLOW.md is missing", () => {
     const dir = makeTmpDir();
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        packageManager: "bun@1.3.10",
+        scripts: {
+          test: "bun test",
+        },
+      }),
+    );
     process.env.DEVAGENT_HUB_FALLBACK_PROVIDER = "chatgpt";
     process.env.DEVAGENT_HUB_FALLBACK_MODEL = "gpt-5.4";
 
@@ -111,6 +134,7 @@ describe("loadWorkflowConfig", () => {
 
     expect(cfg.runner.provider).toBe("chatgpt");
     expect(cfg.runner.model).toBe("gpt-5.4");
+    expect(cfg.verify.commands).toEqual(["bun run test"]);
   });
 
   it("reads and parses WORKFLOW.md from repo root", () => {
@@ -179,6 +203,26 @@ runner:
 `,
     );
     expect(() => loadWorkflowConfig(dir)).toThrow(WorkflowConfigError);
+  });
+
+  it("infers python verify commands when WORKFLOW.md is missing", () => {
+    const dir = makeTmpDir();
+    writeFileSync(join(dir, "pyproject.toml"), "[tool.pytest.ini_options]\naddopts = \"-q\"\n");
+    writeFileSync(join(dir, "test_sample.py"), "def test_example():\n    assert True\n");
+
+    const resolved = resolveWorkflowConfig(dir);
+
+    expect(resolved.source).toBe("inferred-python");
+    expect(resolved.config.verify.commands).toEqual(["python -m pytest"]);
+  });
+
+  it("fails fast when WORKFLOW.md is missing and no safe defaults can be inferred", () => {
+    const dir = makeTmpDir();
+
+    const resolved = resolveWorkflowConfig(dir);
+
+    expect(resolved.source).toBe("unknown");
+    expect(() => loadWorkflowConfig(dir)).toThrow(/could not infer safe defaults/i);
   });
 });
 

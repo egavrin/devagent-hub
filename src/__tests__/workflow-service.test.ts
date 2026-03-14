@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import type { GitHubCheck, GitHubComment, GitHubIssue, GitHubPR } from "../githu
 import type { RunnerClient } from "../runner-client/types.js";
 import type { Project } from "../canonical/types.js";
 import { PROTOCOL_VERSION, type ArtifactRef, type TaskExecutionEvent, type TaskExecutionRequest, type TaskExecutionResult } from "@devagent-sdk/types";
+import type { ResolvedWorkflowConfig } from "../workflow/config.js";
 
 const paths: string[] = [];
 process.env.DEVAGENT_HUB_SKIP_BASELINE_CHECKS = "1";
@@ -164,9 +165,10 @@ class StubRunnerClient implements RunnerClient {
   private readonly failureByTaskType: Partial<Record<TaskExecutionRequest["taskType"], { code: string; message: string }>>;
 
   constructor(
-    private readonly repoRoot: string,
+    protected readonly repoRoot: string,
     private readonly reviewSequence: string[],
     private readonly changedFilesByTaskType: Partial<Record<TaskExecutionRequest["taskType"], string[]>> = {},
+    private readonly changedFilesSequenceByTaskType: Partial<Record<TaskExecutionRequest["taskType"], string[][]>> = {},
     private readonly patchBytesByTaskType: Partial<Record<TaskExecutionRequest["taskType"], number>> = {},
     failureByTaskType: Partial<Record<TaskExecutionRequest["taskType"], { code: string; message: string }>> = {},
   ) {
@@ -216,6 +218,16 @@ class StubRunnerClient implements RunnerClient {
       taskId: request.taskId,
       status: failure ? "failed" : "success",
       artifacts: [artifact],
+      session: request.taskType === "verify"
+        ? undefined
+        : {
+            kind: "devagent-headless-v1",
+            payload: {
+              requestTaskId: request.taskId,
+              continuationMode: request.continuation?.mode ?? "fresh",
+            },
+          },
+      outcome: failure ? "no_progress" : "completed",
       metrics: {
         startedAt: "2026-03-10T00:00:00.000Z",
         finishedAt: "2026-03-10T00:00:01.000Z",
@@ -249,7 +261,7 @@ class StubRunnerClient implements RunnerClient {
     return request;
   }
 
-  private async ensureWorkspace(runId: string): Promise<string> {
+  protected async ensureWorkspace(runId: string): Promise<string> {
     const existing = this.workspaces.get(runId);
     if (existing) {
       return existing;
@@ -259,9 +271,17 @@ class StubRunnerClient implements RunnerClient {
     return workspacePath;
   }
 
-  private async writeArtifact(workspacePath: string, request: TaskExecutionRequest): Promise<ArtifactRef> {
+  protected async writeArtifact(workspacePath: string, request: TaskExecutionRequest): Promise<ArtifactRef> {
     await mkdir(workspacePath, { recursive: true });
-    const changedFiles = this.changedFilesByTaskType[request.taskType];
+    const queuedChangedFiles = this.changedFilesSequenceByTaskType[request.taskType];
+    const changedFiles = queuedChangedFiles?.length
+      ? queuedChangedFiles.shift()
+      : this.changedFilesByTaskType[request.taskType]
+        ?? (request.taskType === "implement"
+          ? ["src/implemented.ts"]
+          : request.taskType === "repair"
+            ? ["src/repaired.ts"]
+            : undefined);
     if (changedFiles) {
       await writeFile(
         join(workspacePath, ".devagent-changed-files.json"),
@@ -300,6 +320,66 @@ class StubRunnerClient implements RunnerClient {
       createdAt: "2026-03-10T00:00:01.000Z",
       mimeType: "text/markdown",
     };
+  }
+}
+
+class SharedWorkspaceContaminationRunnerClient extends StubRunnerClient {
+  private sharedWorkspacePath: string | null = null;
+
+  protected override async ensureWorkspace(_runId: string): Promise<string> {
+    if (this.sharedWorkspacePath) {
+      return this.sharedWorkspacePath;
+    }
+    this.sharedWorkspacePath = await createTempDir("devagent-hub-shared-run-");
+    await mkdir(this.sharedWorkspacePath, { recursive: true });
+    return this.sharedWorkspacePath;
+  }
+
+  protected override async writeArtifact(workspacePath: string, request: TaskExecutionRequest): Promise<ArtifactRef> {
+    const primaryRepository = request.execution.repositories.find((repository) =>
+      repository.repositoryId === request.execution.primaryRepositoryId
+    );
+    if ((request.taskType === "triage" || request.taskType === "plan") && primaryRepository?.readOnly === false) {
+      await writeFile(
+        join(workspacePath, ".devagent-changed-files.json"),
+        JSON.stringify(["README.md"], null, 2),
+      );
+    }
+    return super.writeArtifact(workspacePath, request);
+  }
+}
+
+class NestedPrimaryRepoRunnerClient extends StubRunnerClient {
+  protected override async ensureWorkspace(runId: string): Promise<string> {
+    const existing = await super.ensureWorkspace(runId);
+    const primaryRepoPath = join(existing, "repos", "primary");
+    await mkdir(join(existing, "repos"), { recursive: true });
+    if (!await this.pathExists(join(primaryRepoPath, ".git"))) {
+      git(existing, ["clone", this.repoRoot, primaryRepoPath]);
+    }
+    return existing;
+  }
+
+  protected override async writeArtifact(workspacePath: string, request: TaskExecutionRequest): Promise<ArtifactRef> {
+    const artifact = await super.writeArtifact(workspacePath, request);
+    if (request.taskType === "implement") {
+      const primaryRepoPath = join(workspacePath, "repos", "primary");
+      await writeFile(join(primaryRepoPath, "README.md"), "# repo\nnested change\n");
+    }
+    return artifact;
+  }
+
+  async cleanupRun(runId: string): Promise<void> {
+    await super.cleanupRun(runId);
+  }
+
+  private async pathExists(path: string): Promise<boolean> {
+    try {
+      await access(path);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -404,9 +484,11 @@ async function createService(
   reviewSequence: string[] = ["No defects found."],
   options: {
     changedFilesByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], string[]>>;
+    changedFilesSequenceByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], string[][]>>;
     patchBytesByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], number>>;
     failureByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], { code: string; message: string }>>;
     githubPushFailures?: number;
+    configResolution?: ResolvedWorkflowConfig;
   } = {},
 ) {
   const root = await createTempDir("devagent-hub-service-");
@@ -440,6 +522,7 @@ async function createService(
     repoRoot,
     [...reviewSequence],
     options.changedFilesByTaskType,
+    options.changedFilesSequenceByTaskType,
     options.patchBytesByTaskType,
     options.failureByTaskType,
   );
@@ -465,7 +548,14 @@ async function createService(
     github,
     repoRoot,
     runner,
-    service: new WorkflowService(store, github, runner, project, config),
+    service: new WorkflowService(
+      store,
+      github,
+      runner,
+      project,
+      config,
+      options.configResolution,
+    ),
   };
 }
 
@@ -477,8 +567,10 @@ function reopenService(input: {
   repoRoot: string;
   reviewSequence?: string[];
   changedFilesByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], string[]>>;
+  changedFilesSequenceByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], string[][]>>;
   patchBytesByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], number>>;
   failureByTaskType?: Partial<Record<TaskExecutionRequest["taskType"], { code: string; message: string }>>;
+  configResolution?: ResolvedWorkflowConfig;
 }) {
   const store = new CanonicalStore(input.dbPath);
   const github = new StubGitHubGateway(input.issue);
@@ -486,6 +578,7 @@ function reopenService(input: {
     input.repoRoot,
     [...(input.reviewSequence ?? ["No defects found."])],
     input.changedFilesByTaskType,
+    input.changedFilesSequenceByTaskType,
     input.patchBytesByTaskType,
     input.failureByTaskType,
   );
@@ -493,7 +586,7 @@ function reopenService(input: {
     store,
     github,
     runner,
-    service: new WorkflowService(store, github, runner, input.project, input.config),
+    service: new WorkflowService(store, github, runner, input.project, input.config, input.configResolution),
   };
 }
 
@@ -579,6 +672,171 @@ describe("WorkflowService", () => {
     expect(snapshot.tasks.map((task) => task.type)).toEqual(["triage", "plan"]);
     expect(snapshot.approvals).toHaveLength(1);
     expect(snapshot.events.length).toBeGreaterThan(0);
+
+    store.close();
+  });
+
+  it("sends triage and plan as readonly stages with explicit no-edit instructions", async () => {
+    const { store, service, runner } = await createService();
+
+    await service.start("42");
+
+    const triageRequest = runner.startedRequests.find((request) => request.taskType === "triage");
+    const planRequest = runner.startedRequests.find((request) => request.taskType === "plan");
+
+    expect(triageRequest?.execution.repositories.every((repository) => repository.readOnly)).toBe(true);
+    expect(planRequest?.execution.repositories.every((repository) => repository.readOnly)).toBe(true);
+    expect(triageRequest?.context.extraInstructions).toContain("Do not modify files.");
+    expect(triageRequest?.context.extraInstructions).toContain("Do not run verification commands.");
+    expect(planRequest?.context.extraInstructions).toContain("Only inspect current state and produce the requested artifact.");
+
+    store.close();
+  });
+
+  it("keeps implement writable for target repositories", async () => {
+    const { store, service, runner } = await createService(["No defects found."]);
+
+    const started = await service.start("42");
+    await service.resume(started.id);
+
+    const implementRequest = runner.startedRequests.find((request) => request.taskType === "implement");
+    const primaryExecutionRepository = implementRequest?.execution.repositories.find((repository) =>
+      repository.repositoryId === implementRequest.execution.primaryRepositoryId
+    );
+
+    expect(primaryExecutionRepository?.readOnly).toBe(false);
+
+    store.close();
+  });
+
+  it("prevents triage and plan from contaminating implement no-progress detection", async () => {
+    const repoRoot = await createTempDir("devagent-hub-contamination-repo-");
+    await initializeRepo(repoRoot);
+    const dbPath = join(await createTempDir("devagent-hub-db-"), "hub.db");
+    const issue: GitHubIssue = {
+      number: 42,
+      title: "Contamination regression",
+      body: "Prevent pre-implement mutation.",
+      labels: ["devagent"],
+      url: "https://github.com/org/repo/issues/42",
+      state: "open",
+      author: "eg",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      comments: [],
+    };
+    const store = new CanonicalStore(dbPath);
+    const github = new StubGitHubGateway(issue);
+    const project: Project = {
+      id: "org/repo",
+      name: "repo",
+      repoRoot,
+      repoFullName: "org/repo",
+      workflowConfigPath: join(repoRoot, "WORKFLOW.md"),
+      allowedExecutors: ["devagent"],
+    };
+    store.upsertProject(project);
+    store.upsertWorkspace({
+      id: project.id,
+      name: project.name,
+      provider: "github",
+      primaryRepositoryId: `${project.id}:primary`,
+      workflowConfigPath: project.workflowConfigPath,
+      allowedExecutors: project.allowedExecutors,
+    });
+    store.upsertRepository({
+      id: `${project.id}:primary`,
+      workspaceId: project.id,
+      alias: "primary",
+      name: project.name,
+      repoRoot: project.repoRoot,
+      repoFullName: project.repoFullName,
+      defaultBranch: "main",
+      provider: "github",
+    });
+    const config = defaultConfig();
+    config.runner.bin = "devagent";
+    config.runner.provider = "chatgpt";
+    config.runner.model = "gpt-5.4";
+    const runner = new SharedWorkspaceContaminationRunnerClient(repoRoot, ["No defects found."], {}, {
+      implement: [
+        [],
+        [],
+      ],
+    });
+    const service = new WorkflowService(store, github, runner, project, config);
+
+    const started = await service.start("42");
+    const failed = await service.resume(started.id);
+    const triageRequest = runner.startedRequests.find((request) => request.taskType === "triage");
+    const planRequest = runner.startedRequests.find((request) => request.taskType === "plan");
+
+    expect(triageRequest?.execution.repositories.every((repository) => repository.readOnly)).toBe(true);
+    expect(planRequest?.execution.repositories.every((repository) => repository.readOnly)).toBe(true);
+    expect(failed.status).toBe("failed");
+    expect(failed.stage).toBe("implement");
+    expect(failed.statusReason).toContain("no repository changes after retry");
+
+    store.close();
+  });
+
+  it("detects implement changes from a nested primary repo workspace", async () => {
+    const root = await createTempDir("devagent-hub-nested-primary-");
+    const dbPath = join(root, "state.db");
+    const repoRoot = join(root, "repo");
+    await mkdir(repoRoot, { recursive: true });
+    await initializeRepo(repoRoot);
+    const store = new CanonicalStore(dbPath);
+    const issue: GitHubIssue = {
+      number: 42,
+      title: "Nested workspace regression",
+      body: "Detect git-worktree changes under repos/primary.",
+      labels: ["devagent"],
+      url: "https://github.com/org/repo/issues/42",
+      state: "open",
+      author: "eg",
+      createdAt: "2026-03-10T00:00:00.000Z",
+      comments: [],
+    };
+    const github = new StubGitHubGateway(issue);
+    const project: Project = {
+      id: "org/repo",
+      name: "repo",
+      repoRoot,
+      repoFullName: "org/repo",
+      workflowConfigPath: join(repoRoot, "WORKFLOW.md"),
+      allowedExecutors: ["devagent"],
+    };
+    store.upsertProject(project);
+    store.upsertWorkspace({
+      id: project.id,
+      name: project.name,
+      provider: "github",
+      primaryRepositoryId: `${project.id}:primary`,
+      workflowConfigPath: project.workflowConfigPath,
+      allowedExecutors: project.allowedExecutors,
+    });
+    store.upsertRepository({
+      id: `${project.id}:primary`,
+      workspaceId: project.id,
+      alias: "primary",
+      name: project.name,
+      repoRoot: project.repoRoot,
+      repoFullName: project.repoFullName,
+      defaultBranch: "main",
+      provider: "github",
+    });
+    const config = defaultConfig();
+    config.runner.bin = "devagent";
+    config.runner.provider = "chatgpt";
+    config.runner.model = "gpt-5.4";
+    const runner = new NestedPrimaryRepoRunnerClient(repoRoot, ["No defects found."]);
+    const service = new WorkflowService(store, github, runner, project, config);
+
+    const started = await service.start("42");
+    const resumed = await service.resume(started.id);
+
+    expect(resumed.status).toBe("waiting_approval");
+    expect(resumed.stage).toBe("review");
 
     store.close();
   });
@@ -707,6 +965,35 @@ describe("WorkflowService", () => {
     store.close();
   });
 
+  it("injects inferred workflow warnings into triage, plan, and implement requests", async () => {
+    const inferredConfig = defaultConfig();
+    const { store, service, runner } = await createService(["No defects found."], {
+      configResolution: {
+        config: inferredConfig,
+        source: "inferred-python",
+        warnings: [
+          "WORKFLOW.md is missing; inferred python workflow defaults.",
+          "Using inferred verify commands: python -m pytest",
+        ],
+        inferredVerifyCommands: ["python -m pytest"],
+        detectedProjectKind: "python",
+      },
+    });
+
+    const started = await service.start("42");
+    await service.resume(started.id);
+
+    const triageRequest = runner.startedRequests.find((request) => request.taskType === "triage");
+    const planRequest = runner.startedRequests.find((request) => request.taskType === "plan");
+    const implementRequest = runner.startedRequests.find((request) => request.taskType === "implement");
+
+    expect(triageRequest?.context.extraInstructions?.join("\n")).toContain("inferred python workflow defaults");
+    expect(planRequest?.context.extraInstructions?.join("\n")).toContain("python -m pytest");
+    expect(implementRequest?.context.extraInstructions?.join("\n")).toContain("Detected project kind: python");
+
+    store.close();
+  });
+
   it("pauses for manual approval when implement changes exceed the review file threshold", async () => {
     const { store, service } = await createService(["No defects found."], {
       changedFilesByTaskType: {
@@ -739,6 +1026,52 @@ describe("WorkflowService", () => {
     expect(failed.status).toBe("failed");
     expect(failed.stage).toBe("implement");
     expect(failed.statusReason).toContain("review.run_max_changed_files");
+
+    store.close();
+  });
+
+  it("retries implement once when the first attempt produces no repository changes", async () => {
+    const { store, service, runner } = await createService(["No defects found."], {
+      changedFilesSequenceByTaskType: {
+        implement: [
+          [],
+          ["src/fixed.ts"],
+        ],
+      },
+    });
+    const started = await service.start("42");
+    const resumed = await service.resume(started.id);
+    const snapshot = service.getSnapshot(started.id);
+    const implementTask = snapshot.tasks.find((task) => task.type === "implement");
+
+    expect(resumed.status).toBe("waiting_approval");
+    expect(resumed.stage).toBe("review");
+    expect(implementTask?.attemptIds).toHaveLength(2);
+    expect(runner.startedRequests.filter((request) => request.taskType === "implement")).toHaveLength(2);
+    expect(runner.startedRequests.filter((request) => request.taskType === "implement")[1]?.continuation?.mode).toBe("resume");
+    expect(service.getLatestContinuationSession(started.id, ["implement"])?.kind).toBe("devagent-headless-v1");
+
+    store.close();
+  });
+
+  it("fails implement when retry still produces no repository changes", async () => {
+    const { store, service, runner } = await createService(["No defects found."], {
+      changedFilesSequenceByTaskType: {
+        implement: [
+          [],
+          [],
+        ],
+      },
+    });
+    const started = await service.start("42");
+    const failed = await service.resume(started.id);
+    const implementRequests = runner.startedRequests.filter((request) => request.taskType === "implement");
+
+    expect(failed.status).toBe("failed");
+    expect(failed.stage).toBe("implement");
+    expect(failed.statusReason).toContain("no repository changes after retry");
+    expect(implementRequests).toHaveLength(2);
+    expect(implementRequests[1]?.continuation?.reason).toBe("retry_no_progress");
 
     store.close();
   });

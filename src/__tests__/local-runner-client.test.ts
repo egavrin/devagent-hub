@@ -6,6 +6,7 @@ import { afterEach, test } from "vitest";
 import { LocalRunnerClient } from "../runner-client/local-runner-client.js";
 import { defaultConfig } from "../workflow/config.js";
 import { PROTOCOL_VERSION, type TaskExecutionRequest } from "@devagent-sdk/types";
+import { buildNodeScriptCommand } from "../runtime/node-runtime.js";
 
 const tempPaths: string[] = [];
 
@@ -145,4 +146,13 @@ test("LocalRunnerClient falls back to runner.bin when profile bin is absent", as
 
   assert.equal(result.status, "success");
   assert.match(await readFile(result.artifacts[0]!.path, "utf-8"), /runner bin output/);
+});
+
+test("LocalRunnerClient launches the default DevAgent CLI through Node", async () => {
+  const config = defaultConfig();
+  const client = new LocalRunnerClient(config, "/tmp/devagent cli.js");
+
+  const devagentAdapter = (client as any).runner.adapters[0];
+
+  assert.equal(devagentAdapter.command, buildNodeScriptCommand("/tmp/devagent cli.js"));
 });

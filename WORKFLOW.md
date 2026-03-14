@@ -76,6 +76,10 @@ repair:
 - skill selection by stage and path
 - PR draft/open rules
 
+If a target repo has no `WORKFLOW.md`, Hub falls back to inferred safe defaults only for Bun/Node
+and Python repositories. It injects the inferred verify commands into early workflow context and
+fails fast for unknown repo types instead of guessing.
+
 ## How work enters this repo
 
 Most changes land through self-hosting Hub workflows or direct contributor changes to orchestration,
@@ -84,6 +88,10 @@ persistence, GitHub integration, and operator CLI behavior.
 Hub resolves the selected profile into an SDK `ExecutorSpec`, submits a `TaskExecutionRequest` to
 `devagent-runner`, and waits for normalized events/results/artifacts. Hub does not shell out to
 executors directly.
+
+Execution results may carry opaque executor session metadata. Hub persists that metadata and can
+resume the prior `devagent` session for iterative follow-up runs such as no-progress retries and
+future multi-step repair or planning flows.
 
 ## Recommended Local Validation Profile
 
