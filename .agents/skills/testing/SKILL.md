@@ -1,6 +1,6 @@
 ---
 name: testing
-description: Verify Hub changes with canonical-store, workflow-service, baseline, and TUI tests.
+description: Verify Hub changes with workflow-service, canonical-store, runner-client, baseline, and documentation-parity tests.
 ---
 
 # Testing
@@ -9,45 +9,39 @@ Hub tests run through Vitest. Most coverage lives in `src/__tests__/`.
 
 ## Conventions
 
-- Import test helpers from `vitest`.
-- Use temp SQLite DBs and clean them up in `afterEach`.
-- Exercise orchestration through `WorkflowService`, not through ad hoc store mutation.
-- Prefer the canonical-path tests:
-  - `workflow-service.test.ts`
-  - `canonical-store.test.ts`
-  - `baseline-compatibility.test.ts`
-  - `baseline-machine-path.test.ts`
-  - `tui.test.tsx`
+- Exercise orchestration through `WorkflowService` and persistence through `CanonicalStore`.
+- Prefer temp directories, temp git repos, and isolated SQLite databases over mutating shared state.
+- Keep documentation-facing changes covered by `documentation.test.ts` when active guidance files
+  change.
+- Baseline compatibility and machine-path tests are intentionally gated; run them when changing the
+  SDK or runner boundary.
+
+## Key Suites
+
+- `src/__tests__/workflow-service.test.ts`
+- `src/__tests__/canonical-store.test.ts`
+- `src/__tests__/local-runner-client.test.ts`
+- `src/__tests__/workflow-config.test.ts`
+- `src/__tests__/skill-resolver.test.ts`
+- `src/__tests__/documentation.test.ts`
+- `src/__tests__/baseline-compatibility.test.ts`
+- `src/__tests__/baseline-machine-path.test.ts`
 
 ## Verification
 
-Run the same checks the repo documents:
+Run the standard repo checks:
 
 ```bash
-node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts
+bun run test
 bunx tsc --noEmit
 bun run build
+bun run check:oss
 ```
 
-## Mock output format
+Run the heavier baseline checks when runner, SDK contract, or baseline behavior changes:
 
-All mock outputs must match the flat contract format the orchestrator expects:
-
-```typescript
-// review/gate phases
-{ verdict: "pass", blockingCount: 0, summary: "Clean" }
-
-// verify phase
-{ summary: "Pass", passed: true }
-
-// triage/plan/implement
-{ summary: "..." }
+```bash
+bun run baseline:drift
+bun run baseline:compat
+bun run baseline:smoke
 ```
-
-## What to test
-
-- Happy path: phase succeeds, correct artifact stored, correct status transition.
-- Failure path: phase returns non-zero exit, correct status transition to `failed`.
-- Input validation: required fields missing → exit code 2.
-- State transitions: verify `assertTransition()` rejects invalid transitions.
-- For new runners: at minimum test bin detection via `factory.getLauncher(phase).id`.

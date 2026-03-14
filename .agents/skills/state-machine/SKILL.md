@@ -1,55 +1,47 @@
 ---
 name: state-machine
-description: Review and modify the canonical workflow/task/approval state machine without breaking staged orchestration.
+description: Review and modify the canonical workflow, approval, and issue-unit state machine without breaking staged orchestration.
 ---
 
 # State Machine
 
-The canonical workflow state lives in `src/workflows/service.ts`, `src/canonical/types.ts`, and
-`src/persistence/canonical-store.ts`.
+The canonical workflow state lives in:
 
-## Current workflow stages
+- `src/workflows/service.ts`
+- `src/persistence/canonical-store.ts`
+- `src/canonical/types.ts`
+- `src/workflow/config.ts`
 
-`triage -> plan -> implement -> verify -> review -> repair -> done`
+## Current Workflow Definitions
 
-Workflow status is tracked separately:
-
-`queued | running | waiting_approval | failed | completed | cancelled`
+- `legacy-issue-v1`
+  `triage -> plan -> implement -> verify -> review -> repair -> done`
+- `feature-delivery-local-v1`
+  `task-intake -> design -> breakdown -> issue-generation -> triage -> plan -> test-plan -> implement -> verify -> review -> repair -> completion -> done`
 
 ## Rules
 
-- Keep workflow state changes inside `WorkflowService`.
-- Persist all workflow/task/attempt/approval changes through `CanonicalStore`.
-- Do not mutate persisted state ad hoc in the CLI or TUI.
-- Preserve the hard checkpoints after `plan` and before PR creation.
-- If you change stage progression, update the workflow tests in `src/__tests__/workflow-service.test.ts`.
-- The `plan_revision` status enables rework loops: `plan_review → plan_revision → planning → plan_review`.
-- Terminal states (`done`, `failed`, `escalated`) cannot transition further.
-- `escalated` is used by autopilot when risk thresholds are exceeded.
+- Keep stage progression, approval pauses, and repair loops inside `WorkflowService`.
+- Persist workflow, task, approval, artifact, context-bundle, and issue-unit changes through
+  `CanonicalStore`.
+- Preserve the hard approval checkpoints after `design`, after `plan`, and before PR handoff when
+  the selected workflow definition requires them.
+- Feature-delivery workflows depend on issue-unit sequencing and dependency tracking; do not bypass
+  that logic with ad hoc status edits.
+- If you change stage order, approval behavior, or terminal-state handling, update the seeded
+  workflow definitions and the workflow-service tests together.
 
-## Artifacts
+## Testing
 
-Every phase must store its output as an artifact via `store.createArtifact()`:
+Prioritize:
 
-| Phase | Artifact type | Key fields |
-|-------|--------------|------------|
-| triage | `triage_report` | summary, complexity |
-| plan | `plan_draft` | summary, steps |
-| approve | `accepted_plan` | copy of plan_draft |
-| implement | (commit) | changedFiles |
-| verify | `verification_report` | passed, results |
-| review | `review_report` | verdict, blockingCount |
-| repair | `repair_report` | fixedFindings |
-| gate | `gate_verdict` | verdict, confidence |
+- `src/__tests__/workflow-service.test.ts`
+- `src/__tests__/canonical-store.test.ts`
+- `src/__tests__/workflow-config.test.ts`
 
-## Approval requests
+Run:
 
-- `plan_review` creates an `ApprovalRequest` with action `approve_plan`.
-- `approvePlan()` resolves it and copies `plan_draft → accepted_plan`.
-- `reworkPlan()` resolves as `rework` and re-enters `plan_revision`.
-
-## Error handling
-
-- Non-critical GitHub calls (comments, labels) use `safeGitHub()` — log to stderr, don't throw.
-- Critical calls (fetchIssue, pushBranch, createPR) throw — workflow can't proceed without them.
-- On implement failure, call `cleanupWorktree()` to prevent orphaned worktrees.
+```bash
+bun run test
+bunx tsc --noEmit
+```

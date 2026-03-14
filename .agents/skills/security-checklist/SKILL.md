@@ -1,41 +1,56 @@
 ---
 name: security-checklist
-description: Review Hub and Runner changes for command safety, secret handling, and unsafe workflow continuation.
+description: Review Hub changes for command safety, secret handling, and unsafe workflow continuation.
 ---
 
 # Security Checklist
 
-When reviewing code changes, verify:
+Use this when reviewing changes to command execution, GitHub operations, workflow continuation, or
+artifact handling.
 
-## Command safety
+## Command Safety
 
-- No unsanitized user input is passed into `execFileSync`, `exec`, `spawn`, or shell strings.
-- Repo paths, task ids, workflow ids, and branch names are treated as data, not shell fragments.
-- Dynamic prompt or request content is written to files or JSON payloads, not interpolated into shell commands.
+- Prefer `execFileSync` or typed library APIs over shell interpolation.
+- Treat repo paths, branch names, workflow ids, PR numbers, and issue ids as data, not shell
+  fragments.
+- Keep command construction in helpers such as `src/runtime/node-runtime.ts` rather than duplicating
+  quoting logic.
 
-## Secret handling
+## Secrets And Artifacts
 
-- Credentials come from `gh`, env vars, or local auth stores, never hardcoded.
-- Logs and artifacts do not capture access tokens or other secrets.
+- Credentials must come from `gh`, environment variables, or local auth stores. Never hardcode
+  tokens or persist them in repo-tracked files.
+- Workflow artifacts may contain prompt or issue content. Do not dump full artifacts or raw result
+  payloads to stdout without a specific reason.
+- `.env` files and local auth material must not be committed.
 
-## Workflow safety
+## Workflow Safety
 
-- Resume/open/repair paths verify the recorded baseline and branch expectations before continuing.
-- Historical or stale runs fail loudly instead of silently continuing on the wrong branch or commit.
-- Artifact files may contain prompt content — don't log full artifacts to stdout.
-- `.env` files must not be committed.
+- Resume, PR open, and PR repair paths must validate the recorded baseline and branch expectations
+  before continuing.
+- Historical or stale runs should fail loudly with explicit reasons instead of continuing on the
+  wrong branch or commit.
+- Review-size limits and patch-size limits are safety rails, not optional hints.
 
-## Path traversal
-- `artifactsDir`, `runDir` paths are built with `join()` from controlled components.
-- `runId` and `phase` are validated before use in file paths.
+## Persistence And Paths
 
-## State integrity
-- All status transitions go through `assertTransition()` — no direct DB writes.
-- `deleteWorkflowRun()` cascades to artifacts and approval_requests.
-- SQLite operations use parameterized queries (the `better-sqlite3` / `bun:sqlite` binding handles this).
+- Keep workflow state changes inside `WorkflowService` and persisted through `CanonicalStore`.
+- Use the store interface instead of ad hoc SQL in callers when extending persisted behavior.
+- Build artifact and run paths from controlled components; do not let untrusted input choose output
+  locations.
 
-## External runner trust
-- Runner output is parsed as JSON — malformed output should fail gracefully, not crash.
-- `parseJsonFromText()` extractors handle fences and free text without eval.
-- Timeout is enforced on all `execFileSync` calls (default 15min).
-- `maxBuffer` limits prevent memory exhaustion from verbose runners.
+## Verification
+
+Focus reviews on:
+
+- `src/workflows/service.ts`
+- `src/persistence/canonical-store.ts`
+- `src/github/gh-cli-gateway.ts`
+- `src/runtime/node-runtime.ts`
+
+Run:
+
+```bash
+bun run test
+bunx tsc --noEmit
+```
