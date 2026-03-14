@@ -1,21 +1,19 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { CanonicalStore } from "../persistence/canonical-store.js";
 import { GhCliGateway } from "../github/gh-cli-gateway.js";
-import { loadWorkflowConfig } from "../workflow/config.js";
+import { resolveWorkflowConfig } from "../workflow/config.js";
 import { LocalRunnerClient } from "../runner-client/local-runner-client.js";
 import { WorkflowService } from "../workflows/service.js";
 import { resolveReviewableImportRepoRoot } from "./reviewable-import.js";
-
-const CONFIG_DIR = join(homedir(), ".config", "devagent-hub");
-const DB_PATH = join(CONFIG_DIR, "state.db");
+import { resolveHubConfigDir, resolveHubDbPath } from "./paths.js";
+import { resolveNodeRuntime } from "../runtime/node-runtime.js";
 
 function ensureConfigDir(): void {
-  mkdirSync(CONFIG_DIR, { recursive: true });
+  mkdirSync(resolveHubConfigDir(), { recursive: true });
 }
 
 function detectRepoRoot(cwd = process.cwd()): string {
@@ -73,8 +71,11 @@ function createService(repoRootOverride?: string): { store: CanonicalStore; serv
   ensureConfigDir();
   const repoRoot = repoRootOverride ?? detectRepoRoot();
   const repoFullName = detectRepoFullName(repoRoot);
-  const config = loadWorkflowConfig(repoRoot);
-  const store = new CanonicalStore(DB_PATH);
+  const resolvedConfig = resolveWorkflowConfig(repoRoot);
+  if (resolvedConfig.source === "unknown") {
+    throw new Error(resolvedConfig.warnings.join(" "));
+  }
+  const store = new CanonicalStore(resolveHubDbPath());
   const project = store.upsertProject({
     id: repoFullName,
     name: repoFullName.split("/")[1] ?? repoFullName,
@@ -89,9 +90,10 @@ function createService(repoRootOverride?: string): { store: CanonicalStore; serv
     service: new WorkflowService(
       store,
       new GhCliGateway(),
-      new LocalRunnerClient(config),
+      new LocalRunnerClient(resolvedConfig.config),
       project,
-      config,
+      resolvedConfig.config,
+      resolvedConfig,
     ),
   };
 }
@@ -176,7 +178,7 @@ function createServiceForReviewableImport(
 
 function createStore(): CanonicalStore {
   ensureConfigDir();
-  return new CanonicalStore(DB_PATH);
+  return new CanonicalStore(resolveHubDbPath());
 }
 
 function hasFlag(args: string[], flag: string): boolean {
@@ -204,20 +206,7 @@ function spawnDetachedContinue(workflowId: string, cwd = process.cwd()): void {
 }
 
 function resolveDetachedRuntime(): string {
-  if (!process.versions.bun) {
-    return process.execPath;
-  }
-  const candidates = [
-    process.env.DEVAGENT_HUB_NODE_PATH,
-    "/opt/homebrew/bin/node",
-    "/usr/local/bin/node",
-  ].filter((candidate): candidate is string => Boolean(candidate));
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return process.execPath;
+  return resolveNodeRuntime();
 }
 
 function formatStatus(view: ReturnType<WorkflowService["getStatusView"]>): string {

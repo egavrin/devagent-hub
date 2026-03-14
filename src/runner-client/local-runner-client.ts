@@ -10,6 +10,7 @@ import type { TaskExecutionEvent, TaskExecutionRequest, TaskExecutionResult } fr
 import { resolveBaselineRepoPath, resolveWorkspaceRoot } from "../baseline/manifest.js";
 import type { RunnerClient } from "./types.js";
 import type { WorkflowConfig } from "../workflow/config.js";
+import { buildNodeScriptCommand } from "../runtime/node-runtime.js";
 
 export class LocalRunnerClient implements RunnerClient {
   private readonly runner: LocalRunner;
@@ -28,7 +29,7 @@ export class LocalRunnerClient implements RunnerClient {
     );
     this.runner = new LocalRunner({
       adapters: [
-        new DevAgentAdapter(`bun ${resolvedDevagentCliPath}`),
+        new DevAgentAdapter(buildNodeScriptCommand(resolvedDevagentCliPath)),
         new CodexAdapter((request) => this.resolveCommand(request)),
         new ClaudeAdapter((request) => this.resolveCommand(request)),
         new OpenCodeAdapter((request) => this.resolveCommand(request)),

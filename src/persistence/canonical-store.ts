@@ -122,7 +122,8 @@ CREATE TABLE IF NOT EXISTS execution_attempts (
   status TEXT NOT NULL,
   result_path TEXT,
   workspace_path TEXT,
-  event_log_path TEXT
+  event_log_path TEXT,
+  session_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS approvals (
@@ -298,6 +299,7 @@ type ExecutionAttemptRow = {
   result_path: string | null;
   workspace_path: string | null;
   event_log_path: string | null;
+  session_json: string | null;
 };
 
 type ApprovalRow = {
@@ -453,6 +455,7 @@ function mapExecutionAttemptRow(row: ExecutionAttemptRow): ExecutionAttempt {
     resultPath: row.result_path ?? undefined,
     workspacePath: row.workspace_path ?? undefined,
     eventLogPath: row.event_log_path ?? undefined,
+    session: row.session_json ? JSON.parse(row.session_json) : undefined,
   };
 }
 
@@ -594,6 +597,15 @@ export class CanonicalStore {
         this.db.exec("ALTER TABLE execution_attempts ADD COLUMN event_log_path TEXT");
       } catch (error) {
         if (!(error instanceof Error) || !error.message.includes("duplicate column name: event_log_path")) {
+          throw error;
+        }
+      }
+    }
+    if (!names.has("session_json")) {
+      try {
+        this.db.exec("ALTER TABLE execution_attempts ADD COLUMN session_json TEXT");
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("duplicate column name: session_json")) {
           throw error;
         }
       }
@@ -1038,6 +1050,7 @@ export class CanonicalStore {
     runnerId: string;
     workspacePath?: string;
     eventLogPath?: string;
+    session?: ExecutionAttempt["session"];
   }): ExecutionAttempt {
     const attempt: ExecutionAttempt = {
       id: randomUUID(),
@@ -1048,29 +1061,41 @@ export class CanonicalStore {
       status: "running",
       workspacePath: input.workspacePath,
       eventLogPath: input.eventLogPath,
+      session: input.session,
     };
     this.db.prepare(`
-      INSERT INTO execution_attempts (id, task_id, executor_id, runner_id, started_at, status, workspace_path, event_log_path)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(attempt.id, attempt.taskId, attempt.executorId, attempt.runnerId, attempt.startedAt, attempt.status, attempt.workspacePath ?? null, attempt.eventLogPath ?? null);
+      INSERT INTO execution_attempts (id, task_id, executor_id, runner_id, started_at, status, workspace_path, event_log_path, session_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      attempt.id,
+      attempt.taskId,
+      attempt.executorId,
+      attempt.runnerId,
+      attempt.startedAt,
+      attempt.status,
+      attempt.workspacePath ?? null,
+      attempt.eventLogPath ?? null,
+      attempt.session ? JSON.stringify(attempt.session) : null,
+    );
     return attempt;
   }
 
-  updateAttemptMetadata(id: string, patch: { workspacePath?: string; eventLogPath?: string }): ExecutionAttempt {
+  updateAttemptMetadata(id: string, patch: { workspacePath?: string; eventLogPath?: string; session?: ExecutionAttempt["session"] }): ExecutionAttempt {
     const current = this.getAttempt(id);
     if (!current) throw new Error(`Attempt ${id} not found`);
     const next: ExecutionAttempt = {
       ...current,
       workspacePath: patch.workspacePath ?? current.workspacePath,
       eventLogPath: patch.eventLogPath ?? current.eventLogPath,
+      session: patch.session ?? current.session,
     };
     this.db.prepare(`
-      UPDATE execution_attempts SET workspace_path = ?, event_log_path = ? WHERE id = ?
-    `).run(next.workspacePath ?? null, next.eventLogPath ?? null, id);
+      UPDATE execution_attempts SET workspace_path = ?, event_log_path = ?, session_json = ? WHERE id = ?
+    `).run(next.workspacePath ?? null, next.eventLogPath ?? null, next.session ? JSON.stringify(next.session) : null, id);
     return next;
   }
 
-  finishAttempt(id: string, result: { status: ExecutionAttempt["status"]; resultPath?: string; workspacePath?: string; eventLogPath?: string }): ExecutionAttempt {
+  finishAttempt(id: string, result: { status: ExecutionAttempt["status"]; resultPath?: string; workspacePath?: string; eventLogPath?: string; session?: ExecutionAttempt["session"] }): ExecutionAttempt {
     const current = this.getAttempt(id);
     if (!current) throw new Error(`Attempt ${id} not found`);
     const next: ExecutionAttempt = {
@@ -1079,11 +1104,20 @@ export class CanonicalStore {
       resultPath: result.resultPath,
       workspacePath: result.workspacePath ?? current.workspacePath,
       eventLogPath: result.eventLogPath ?? current.eventLogPath,
+      session: result.session ?? current.session,
       finishedAt: now(),
     };
     this.db.prepare(`
-      UPDATE execution_attempts SET status = ?, result_path = ?, workspace_path = ?, event_log_path = ?, finished_at = ? WHERE id = ?
-    `).run(next.status, next.resultPath ?? null, next.workspacePath ?? null, next.eventLogPath ?? null, next.finishedAt, id);
+      UPDATE execution_attempts SET status = ?, result_path = ?, workspace_path = ?, event_log_path = ?, session_json = ?, finished_at = ? WHERE id = ?
+    `).run(
+      next.status,
+      next.resultPath ?? null,
+      next.workspacePath ?? null,
+      next.eventLogPath ?? null,
+      next.session ? JSON.stringify(next.session) : null,
+      next.finishedAt,
+      id,
+    );
     return next;
   }
 

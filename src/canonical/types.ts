@@ -1,4 +1,5 @@
 import type {
+  ContinuationSession,
   TaskExecutionEvent,
   TaskExecutionResult,
   WorkflowTaskType,
@@ -142,6 +143,7 @@ export type ExecutionAttempt = {
   resultPath?: string;
   workspacePath?: string;
   eventLogPath?: string;
+  session?: ContinuationSession;
 };
 
 export type Approval = {

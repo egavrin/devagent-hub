@@ -11,7 +11,7 @@ import {
   readBranchHead,
   readCurrentBaselineSystemSnapshot,
 } from "../baseline/manifest.js";
-import type { WorkflowConfig } from "../workflow/config.js";
+import type { ResolvedWorkflowConfig, WorkflowConfig } from "../workflow/config.js";
 import { resolveSkills } from "../workflow/skill-resolver.js";
 import { CanonicalStore } from "../persistence/canonical-store.js";
 import type {
@@ -25,6 +25,7 @@ import type {
 import type {
   ArtifactKind,
   CapabilitySet,
+  ContinuationSession,
   ExecutorSpec,
   TaskExecutionRequest,
   TaskExecutionResult,
@@ -97,6 +98,10 @@ function artifactKindForStage(stage: WorkflowTaskType): ArtifactKind {
   }
 }
 
+function isReadonlyStage(stage: WorkflowTaskType): boolean {
+  return stage === "triage" || stage === "plan" || stage === "review";
+}
+
 function isFailureStatus(status: WorkflowInstance["status"]): boolean {
   return status === "failed" || status === "cancelled";
 }
@@ -116,6 +121,13 @@ export class WorkflowService {
     private readonly runnerClient: RunnerClient,
     private readonly project: Project,
     private readonly config: WorkflowConfig,
+    private readonly configResolution: ResolvedWorkflowConfig = {
+      config,
+      source: "workflow-file",
+      warnings: [],
+      inferredVerifyCommands: [],
+      detectedProjectKind: "unknown",
+    },
   ) {}
 
   async syncIssues(): Promise<WorkItem[]> {
@@ -703,6 +715,26 @@ export class WorkflowService {
     });
   }
 
+  getLatestContinuationSession(
+    workflowId: string,
+    stages?: WorkflowTaskType[],
+  ): ContinuationSession | undefined {
+    const stageSet = stages ? new Set(stages) : null;
+    const tasks = [...this.store.listTasks(workflowId)].reverse();
+    for (const task of tasks) {
+      if (stageSet && !stageSet.has(task.type)) {
+        continue;
+      }
+      const attempts = [...this.store.listAttempts(task.id)].reverse();
+      for (const attempt of attempts) {
+        if (attempt.session) {
+          return attempt.session;
+        }
+      }
+    }
+    return undefined;
+  }
+
   private assertWorkflowContinuationSafe(
     workflow: WorkflowInstance,
     requireWorkBranch: boolean,
@@ -754,6 +786,25 @@ export class WorkflowService {
       reasoning: (profile.reasoning ?? this.config.runner.reasoning) as ExecutorSpec["reasoning"],
       approvalMode: (profile.approval_mode ?? this.config.runner.approval_mode) as ExecutorSpec["approvalMode"],
     };
+  }
+
+  private inferredConfigInstructions(stage: WorkflowTaskType): string[] {
+    if (!["triage", "plan", "implement"].includes(stage)) {
+      return [];
+    }
+    if (this.configResolution.source === "workflow-file") {
+      return [];
+    }
+    const verifyCommands = this.configResolution.inferredVerifyCommands.length > 0
+      ? this.configResolution.inferredVerifyCommands.join(", ")
+      : "none";
+    return [
+      `Hub inferred workflow defaults because WORKFLOW.md is missing.`,
+      `Detected project kind: ${this.configResolution.detectedProjectKind}.`,
+      `Inferred verify commands: ${verifyCommands}.`,
+      ...this.configResolution.warnings,
+      "Do not assume Bun-based commands unless the inferred project kind is bun.",
+    ];
   }
 
   private findActiveWorkflowForWorkItem(workItemId: string): WorkflowInstance | undefined {
@@ -896,7 +947,17 @@ export class WorkflowService {
     stage: WorkflowTaskType,
     overrides: StageContextOverrides = {},
   ): Promise<WorkflowInstance> {
-    const extraInstructions = [...(overrides.extraInstructions ?? [])];
+    const extraInstructions = [
+      ...(overrides.extraInstructions ?? []),
+      ...this.inferredConfigInstructions(stage),
+    ];
+    if (stage === "triage" || stage === "plan") {
+      extraInstructions.push(
+        "Do not modify files.",
+        "Do not run verification commands.",
+        "Only inspect current state and produce the requested artifact.",
+      );
+    }
     if (stage === "implement") {
       extraInstructions.push(...(await this.latestArtifactInstructions(workflow.id, "plan", "Accepted plan")));
     }
@@ -938,7 +999,7 @@ export class WorkflowService {
         baseRef: pinnedRepositoryBaseRefs.get(repository.alias),
         workBranch: workflow.branch,
         isolation: "git-worktree",
-        readOnly: stage === "review" || !isTargetRepository,
+        readOnly: isReadonlyStage(stage) || !isTargetRepository,
       } as const;
     });
     const capabilities: CapabilitySet = {
@@ -951,9 +1012,8 @@ export class WorkflowService {
     };
     const reviewable = workflow.reviewableId ? this.store.getReviewable(workflow.reviewableId) : undefined;
 
-    const request: TaskExecutionRequest = {
+    const baseRequest = {
       protocolVersion: PROTOCOL_VERSION,
-      taskId: task.id,
       taskType: stage,
       workspaceRef: {
         id: this.project.id,
@@ -1001,55 +1061,116 @@ export class WorkflowService {
         comments: overrides.comments,
         changedFilesHint: overrides.changedFilesHint,
         skills: resolveSkills(this.config, stage, overrides.changedFilesHint),
-        extraInstructions: extraInstructions.length > 0 ? extraInstructions : undefined,
       },
       expectedArtifacts: [artifactKindForStage(stage)],
-    };
+    } satisfies Omit<TaskExecutionRequest, "taskId">;
 
-    const { runId } = await this.runnerClient.startTask(request);
-    const attempt = this.store.createAttempt({
-      taskId: task.id,
-      executorId: request.executor.executorId,
-      runnerId: runId,
-    });
-    this.store.updateTask(task.id, {
-      runnerId: runId,
-      attemptIds: [...task.attemptIds, attempt.id],
-    });
-    const initialMetadata = await this.runnerClient.inspect(runId);
-    this.store.updateAttemptMetadata(attempt.id, {
-      workspacePath: initialMetadata.workspacePath,
-      eventLogPath: initialMetadata.eventLogPath,
-    });
+    const maxAttempts = stage === "implement" || stage === "repair" ? 2 : 1;
+    let retryInstruction: string | undefined;
+    let continuation: TaskExecutionRequest["continuation"] | undefined;
+    let attemptIds = [...task.attemptIds];
 
-    await this.runnerClient.subscribe(runId, (event) => this.store.recordEvent(task.id, event));
-    const result = await this.runnerClient.awaitResult(runId);
-    const metadata = await this.runnerClient.inspect(runId);
+    for (let attemptIndex = 1; attemptIndex <= maxAttempts; attemptIndex += 1) {
+      const request: TaskExecutionRequest = {
+        ...baseRequest,
+        taskId: attemptIndex === 1 ? task.id : `${task.id}:retry-${attemptIndex - 1}`,
+        continuation,
+        context: {
+          ...baseRequest.context,
+          extraInstructions: [
+            ...extraInstructions,
+            ...(retryInstruction ? [retryInstruction] : []),
+          ].filter(Boolean),
+        },
+      };
 
-    this.store.finishAttempt(attempt.id, {
-      status: result.status === "success" ? "success" : result.status === "cancelled" ? "cancelled" : "failed",
-      resultPath: metadata.resultPath,
-      workspacePath: metadata.workspacePath,
-      eventLogPath: metadata.eventLogPath,
-    });
-    this.store.recordArtifacts(task.id, result.artifacts);
-    this.store.recordResult(task.id, result);
-    this.store.updateTask(task.id, {
-      status: result.status === "success" ? "completed" : result.status === "cancelled" ? "cancelled" : "failed",
-    });
-
-    if (result.status !== "success") {
-      await this.runnerClient.cleanupRun(runId);
-      return this.store.updateWorkflowInstance(workflow.id, {
-        stage,
-        status: result.status === "cancelled" ? "cancelled" : "failed",
-        statusReason: result.error?.message,
+      const { runId } = await this.runnerClient.startTask(request);
+      const attempt = this.store.createAttempt({
+        taskId: task.id,
+        executorId: request.executor.executorId,
+        runnerId: runId,
       });
-    }
+      attemptIds = [...attemptIds, attempt.id];
+      this.store.updateTask(task.id, {
+        runnerId: runId,
+        attemptIds,
+      });
+      const initialMetadata = await this.runnerClient.inspect(runId);
+      this.store.updateAttemptMetadata(attempt.id, {
+        workspacePath: initialMetadata.workspacePath,
+        eventLogPath: initialMetadata.eventLogPath,
+      });
 
-    const gatedWorkflow = this.enforceReviewPolicy(workflow, stage, metadata.workspacePath);
-    if (gatedWorkflow) {
-      return gatedWorkflow;
+      await this.runnerClient.subscribe(runId, (event) => this.store.recordEvent(task.id, event));
+      const result = await this.runnerClient.awaitResult(runId);
+      const metadata = await this.runnerClient.inspect(runId);
+
+      this.store.finishAttempt(attempt.id, {
+        status: result.status === "success" ? "success" : result.status === "cancelled" ? "cancelled" : "failed",
+        resultPath: metadata.resultPath,
+        workspacePath: metadata.workspacePath,
+        eventLogPath: metadata.eventLogPath,
+        session: result.session,
+      });
+      this.store.recordArtifacts(task.id, result.artifacts);
+      this.store.recordResult(task.id, result);
+      this.store.updateTask(task.id, {
+        status: result.status === "success" ? "completed" : result.status === "cancelled" ? "cancelled" : "failed",
+      });
+
+      if (result.status !== "success") {
+        await this.runnerClient.cleanupRun(runId);
+        return this.store.updateWorkflowInstance(workflow.id, {
+          stage,
+          status: result.status === "cancelled" ? "cancelled" : "failed",
+          statusReason: result.error?.message,
+        });
+      }
+
+      if (stage === "implement" || stage === "repair") {
+        const changedFiles = this.readChangedFiles(workflow, metadata.workspacePath);
+        if (changedFiles.length === 0) {
+          const outcomeReason = result.outcomeReason ?? "no_repo_changes";
+          const noProgressResult: PersistedExecutionResult = {
+            ...result,
+            outcome: "no_progress",
+            outcomeReason,
+          };
+          this.store.recordResult(task.id, noProgressResult);
+          await this.runnerClient.cleanupRun(runId);
+
+          const causeSuffix = outcomeReason === "no_repo_changes" ? "" : ` (executor reported ${outcomeReason})`;
+          if (attemptIndex < maxAttempts) {
+            retryInstruction =
+              `The previous ${stage} attempt produced no repository changes${causeSuffix}. Continue and make the requested code changes before finishing.`;
+            continuation = executor.executorId === "devagent" && result.session
+              ? {
+                  mode: "resume",
+                  reason: "retry_no_progress",
+                  instructions: retryInstruction,
+                  session: result.session,
+                }
+              : undefined;
+            this.store.updateTask(task.id, {
+              status: "running",
+            });
+            continue;
+          }
+
+          return this.store.updateWorkflowInstance(workflow.id, {
+            stage,
+            status: "failed",
+            statusReason: `${stage} produced no repository changes after retry${causeSuffix}.`,
+          });
+        }
+      }
+
+      const gatedWorkflow = this.enforceReviewPolicy(workflow, stage, metadata.workspacePath);
+      if (gatedWorkflow) {
+        return gatedWorkflow;
+      }
+
+      return this.store.getWorkflowInstance(workflow.id) ?? workflow;
     }
 
     return this.store.getWorkflowInstance(workflow.id) ?? workflow;
@@ -1116,15 +1237,22 @@ export class WorkflowService {
   }
 
   private readChangedFiles(workflow: WorkflowInstance, workspacePath: string): string[] {
-    const markerPath = join(workspacePath, ".devagent-changed-files.json");
-    if (existsSync(markerPath)) {
+    const primaryRepoPath = this.resolveWorkspacePrimaryRepoPath(workflow, workspacePath);
+    const markerPaths = [
+      join(workspacePath, ".devagent-changed-files.json"),
+      join(primaryRepoPath, ".devagent-changed-files.json"),
+    ];
+    for (const markerPath of markerPaths) {
+      if (!existsSync(markerPath)) {
+        continue;
+      }
       const raw = readFileSync(markerPath, "utf-8");
       return [...new Set((JSON.parse(raw) as string[]).filter(Boolean))];
     }
 
     const candidates: Array<{ cwd: string; args: string[] }> = [
       {
-        cwd: workspacePath,
+        cwd: primaryRepoPath,
         args: ["diff", "--name-only", workflow.baseSha],
       },
       {
@@ -1168,15 +1296,22 @@ export class WorkflowService {
   }
 
   private readPatchBytes(workflow: WorkflowInstance, workspacePath: string): number {
-    const markerPath = join(workspacePath, ".devagent-patch-bytes.txt");
-    if (existsSync(markerPath)) {
+    const primaryRepoPath = this.resolveWorkspacePrimaryRepoPath(workflow, workspacePath);
+    const markerPaths = [
+      join(workspacePath, ".devagent-patch-bytes.txt"),
+      join(primaryRepoPath, ".devagent-patch-bytes.txt"),
+    ];
+    for (const markerPath of markerPaths) {
+      if (!existsSync(markerPath)) {
+        continue;
+      }
       const raw = Number.parseInt(readFileSync(markerPath, "utf-8").trim(), 10);
       return Number.isFinite(raw) ? raw : 0;
     }
 
     const candidates: Array<{ cwd: string; args: string[] }> = [
       {
-        cwd: workspacePath,
+        cwd: primaryRepoPath,
         args: ["diff", "--binary", workflow.baseSha],
       },
       {

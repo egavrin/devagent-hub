@@ -86,6 +86,9 @@ That script:
   - `devagent-runner`
   - `devagent-hub`
 
+The installed `devagent-hub` wrapper now boots through Node so the Hub CLI can safely use
+`better-sqlite3` even when Bun is the package manager for the repo.
+
 ## CLI
 
 ```bash
@@ -101,6 +104,9 @@ devagent-hub list
 devagent-hub status <workflow-id>
 devagent-hub status <workflow-id> --json
 ```
+
+Hub state lives under `~/.config/devagent-hub` by default. To isolate Hub state without changing
+auth discovery for `gh` or `devagent`, set `DEVAGENT_HUB_CONFIG_DIR=/path/to/hub-state`.
 
 ## Review The Plan
 
@@ -167,6 +173,10 @@ How feedback is used:
 Use `status --json` only for scripts or external tooling. The default text output is the intended
 operator view.
 
+If the target repo does not contain `WORKFLOW.md`, Hub now infers safe defaults for Bun/Node and
+Python repos and prints the inferred verify commands into the early workflow context. If it cannot
+infer a safe profile, it fails fast and asks the operator to add `WORKFLOW.md`.
+
 ## Review Before PR
 
 After `implement -> verify -> review` completes cleanly, Hub pauses again before PR handoff.
@@ -199,6 +209,10 @@ How feedback is used:
 
 - a rejected final approval note becomes input to the next `repair`
 - Hub then reruns `repair -> verify -> review` and pauses again
+
+When `implement` or `repair` reports success but produces no repository changes, Hub retries once
+with stronger instructions. For `devagent`, that retry resumes the previous session context so the
+follow-up run can continue from the earlier analysis instead of starting cold.
 
 ## Post-PR Feedback
 
@@ -249,7 +263,7 @@ bun run check:oss
 
 - the supported contributor path is the four-repo sibling checkout plus bootstrap flow
 - only the DevAgent executor path is production-grade
-- package publication and a simpler single-repo install story are deferred
+- package publication and a simpler single-repo install story are still evolving
 
 Additional baseline commands:
 

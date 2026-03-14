@@ -17,7 +17,7 @@
     "node": ">=20"
   },
   "bin": {
-    "devagent-hub": "dist/cli/index.js"
+    "devagent-hub": "bin/devagent-hub.js"
   },
   "scripts": {
     "build": "bunx tsc -p tsconfig.json",
